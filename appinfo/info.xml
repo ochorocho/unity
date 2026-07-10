@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<info>
+    <id>unity</id>
+    <name>Unity</name>
+    <summary>Unified issue and ticket tracking across Jira, GitLab, Redmine and GitHub</summary>
+    <description><![CDATA[Unity brings your issues from Jira, GitLab, Redmine and GitHub into a single,
+sortable, cached view inside Nextcloud. Search across all your trackers, read issue details and comments,
+add comments, and log time — using your own API tokens configured per user.]]></description>
+    <version>0.10.9</version>
+    <licence>agpl</licence>
+    <author>Jochen Roth</author>
+    <namespace>Unity</namespace>
+    <category>integration</category>
+    <category>tools</category>
+    <bugs>https://github.com/example/unity/issues</bugs>
+    <dependencies>
+        <nextcloud min-version="31" max-version="34"/>
+    </dependencies>
+    <settings>
+        <personal>OCA\Unity\Settings\Personal</personal>
+        <personal-section>OCA\Unity\Settings\PersonalSection</personal-section>
+    </settings>
+    <navigations>
+        <navigation>
+            <id>unity</id>
+            <name>Unity</name>
+            <route>unity.page.index</route>
+            <icon>app.svg</icon>
+            <order>10</order>
+        </navigation>
+    </navigations>
+    <background-jobs>
+        <job>OCA\Unity\BackgroundJob\SyncIssuesJob</job>
+    </background-jobs>
+</info>
