@@ -78,6 +78,19 @@ class GithubClientTest extends TestCase {
 		$this->assertSame(['t' => 'github', 'c' => 'h1', 'p' => ['owner' => 'octocat', 'repo' => 'Hello-World', 'number' => '10']], Ref::decode($issue->ref));
 	}
 
+	public function testSearchStateQualifierHonorsShowClosed(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, ['items' => []]);
+		});
+		$this->client->search($this->connection, new IssueQuery(assignedToMe: true));
+		$this->assertStringContainsString('state:open', $captured['query']['q'], 'closed hidden by default');
+
+		$this->client->search($this->connection, new IssueQuery(assignedToMe: true, showClosed: true));
+		$this->assertStringNotContainsString('state:open', $captured['query']['q'], 'all states when showing closed');
+	}
+
 	public function testUpdateCommentPatchesComment(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

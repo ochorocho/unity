@@ -21,6 +21,9 @@
 					<NcCheckboxRadioSwitch :model-value="assignedToMe" @update:model-value="onAssignedToggle">
 						{{ t('unity', 'Assigned to me') }}
 					</NcCheckboxRadioSwitch>
+					<NcCheckboxRadioSwitch :model-value="showClosed" @update:model-value="onShowClosedToggle">
+						{{ t('unity', 'Show closed') }}
+					</NcCheckboxRadioSwitch>
 				</div>
 				<NcAppNavigationItem :name="t('unity', 'All connections')"
 					:active="activeConnection === ''"
@@ -132,12 +135,14 @@ export default {
 	},
 	data() {
 		let assignedToMe = true
+		let showClosed = false
 		let activeConnection = ''
 		try {
 			const stored = window.localStorage.getItem('unity:assignedToMe')
 			if (stored !== null) {
 				assignedToMe = stored === 'true'
 			}
+			showClosed = window.localStorage.getItem('unity:showClosed') === 'true'
 			activeConnection = window.localStorage.getItem('unity:activeConnection') || ''
 		} catch (e) {
 			// localStorage unavailable — fall back to the defaults
@@ -151,6 +156,7 @@ export default {
 			sort: 'updated',
 			order: 'desc',
 			assignedToMe,
+			showClosed,
 			activeConnection,
 			loading: false,
 			selected: null,
@@ -220,6 +226,15 @@ export default {
 			}
 			this.reload()
 		},
+		onShowClosedToggle(value) {
+			this.showClosed = value
+			try {
+				window.localStorage.setItem('unity:showClosed', value ? 'true' : 'false')
+			} catch (e) {
+				// localStorage unavailable — preference just won't persist
+			}
+			this.reload()
+		},
 		onSearchInput() {
 			clearTimeout(this.searchTimer)
 			this.searchTimer = setTimeout(() => this.reload(), 400)
@@ -256,6 +271,7 @@ export default {
 					sort: this.sort,
 					order: this.order,
 					assignedToMe: this.assignedToMe ? 'true' : 'false',
+					showClosed: this.showClosed ? 'true' : 'false',
 				}
 				if (this.activeConnection !== '') {
 					params.connections = this.activeConnection

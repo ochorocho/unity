@@ -38,6 +38,7 @@ class IssueController extends Controller {
 		string $sort = 'updated',
 		string $order = 'desc',
 		string $assignedToMe = 'false',
+		string $showClosed = 'false',
 		string $connections = '',
 		string $cursors = '',
 		int $limit = 30,
@@ -47,6 +48,7 @@ class IssueController extends Controller {
 			$sort,
 			$order,
 			$assignedToMe === 'true' || $assignedToMe === '1',
+			$showClosed === 'true' || $showClosed === '1',
 			$limit,
 		);
 		$connectionIds = $connections === '' ? [] : explode(',', $connections);

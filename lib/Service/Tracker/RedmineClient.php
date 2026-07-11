@@ -71,7 +71,7 @@ class RedmineClient extends AbstractTrackerClient {
 			'sort' => $this->sort($query),
 			'limit' => (string)$query->limit,
 			'offset' => (string)$offset,
-			'status_id' => 'open',
+			'status_id' => $query->showClosed ? '*' : 'open',
 		];
 		if ($query->assignedToMe) {
 			$params['assigned_to_id'] = 'me';

@@ -67,7 +67,7 @@ class GitLabClient extends AbstractTrackerClient {
 			'order_by' => $this->orderBy($query->sort),
 			'sort' => strtolower($query->order) === 'asc' ? 'asc' : 'desc',
 			'per_page' => (string)$query->limit,
-			'state' => 'opened',
+			'state' => $query->showClosed ? 'all' : 'opened',
 		];
 		if (trim($query->term) !== '') {
 			$params['search'] = $query->term;

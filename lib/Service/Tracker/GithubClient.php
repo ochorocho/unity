@@ -298,7 +298,9 @@ class GithubClient extends AbstractTrackerClient {
 			$parts[] = $term;
 		}
 		$parts[] = 'is:issue';
-		$parts[] = 'state:open';
+		if (!$query->showClosed) {
+			$parts[] = 'state:open';
+		}
 		$repo = (string)($connection->settings['repo'] ?? '');
 		if ($repo !== '') {
 			$parts[] = 'repo:' . $repo;

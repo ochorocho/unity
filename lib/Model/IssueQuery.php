@@ -16,6 +16,7 @@ class IssueQuery {
 		public string $sort = 'updated',
 		public string $order = 'desc',
 		public bool $assignedToMe = false,
+		public bool $showClosed = false,
 		public int $limit = 30,
 	) {
 	}

@@ -574,6 +574,11 @@ class JiraClient extends AbstractTrackerClient {
 			// text-only search. Always add a recency bound when not filtered by assignee.
 			$clauses[] = 'updated >= -365d';
 		}
+		if (!$query->showClosed) {
+			// Unlike the other trackers, Jira applies no status filter by default, so
+			// exclude Done-category (closed) issues explicitly.
+			$clauses[] = 'statusCategory != Done';
+		}
 		$jql = implode(' AND ', $clauses);
 		$field = match ($query->sort) {
 			'created' => 'created',

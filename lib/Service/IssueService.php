@@ -247,6 +247,7 @@ class IssueService {
 			$connectionId,
 			$query->term,
 			$query->assignedToMe ? '1' : '0',
+			$query->showClosed ? '1' : '0',
 			$query->sort,
 			$query->order,
 			(string)$cursor,

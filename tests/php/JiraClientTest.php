@@ -150,6 +150,19 @@ class JiraClientTest extends TestCase {
 		$this->assertStringContainsString('updated >= -365d', $captured['query']['jql']);
 	}
 
+	public function testSearchExcludesClosedByDefaultAndIncludesWhenRequested(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, ['issues' => [], 'nextPageToken' => null]);
+		});
+		$this->jira->search($this->connection, new IssueQuery());
+		$this->assertStringContainsString('statusCategory != Done', $captured['query']['jql'], 'closed hidden by default');
+
+		$this->jira->search($this->connection, new IssueQuery(showClosed: true));
+		$this->assertStringNotContainsString('statusCategory', $captured['query']['jql'], 'closed included when requested');
+	}
+
 	public function testSearchByKeyReferenceFetchesIssueDirectly(): void {
 		$captured = null;
 		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
@@ -401,7 +414,7 @@ class JiraClientTest extends TestCase {
 		$this->assertStringContainsString('/rest/api/2/search', $captured['url']);
 		$this->assertStringNotContainsString('/search/jql', $captured['url']);
 		$this->assertSame('0', $captured['options']['query']['startAt']);
-		$this->assertSame('assignee = currentUser() ORDER BY updated DESC', $captured['options']['query']['jql']);
+		$this->assertSame('assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', $captured['options']['query']['jql']);
 		// 0 + 50 < 120 → next page cursor is the next offset
 		$this->assertSame('50', $result->nextCursor);
 	}

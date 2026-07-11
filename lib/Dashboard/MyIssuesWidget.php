@@ -62,7 +62,7 @@ class MyIssuesWidget implements IAPIWidget, IIconWidget {
 	 * @return list<WidgetItem>
 	 */
 	public function getItems(string $userId, ?string $since = null, int $limit = 7): array {
-		$query = new IssueQuery('', 'updated', 'desc', true, $limit);
+		$query = new IssueQuery('', 'updated', 'desc', true, false, $limit);
 		$result = $this->issueService->search($userId, $query);
 
 		$icon = $this->getIconUrl();

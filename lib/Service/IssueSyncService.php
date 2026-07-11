@@ -59,7 +59,7 @@ class IssueSyncService {
 
 		// Fetch assigned issues per connection so a failing tracker is isolated
 		// (its snapshot refs are left untouched → no false "closed" alerts).
-		$query = new IssueQuery('', 'updated', 'desc', true, self::LIMIT);
+		$query = new IssueQuery('', 'updated', 'desc', true, false, self::LIMIT);
 		$current = [];
 		$succeeded = [];
 		foreach ($conns as $conn) {

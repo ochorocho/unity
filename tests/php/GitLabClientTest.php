@@ -74,6 +74,19 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame(['t' => 'gitlab', 'c' => 'g1', 'p' => ['project' => '42', 'iid' => '7', 'path' => 'group/app']], Ref::decode($issue->ref));
 	}
 
+	public function testSearchStateHonorsShowClosed(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, [], []);
+		});
+		$this->client->search($this->connection, new IssueQuery());
+		$this->assertSame('opened', $captured['query']['state'], 'closed hidden by default');
+
+		$this->client->search($this->connection, new IssueQuery(showClosed: true));
+		$this->assertSame('all', $captured['query']['state'], 'all states when showing closed');
+	}
+
 	public function testGetTimeRecordsViaGraphQL(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

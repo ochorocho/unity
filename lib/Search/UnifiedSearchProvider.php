@@ -53,6 +53,7 @@ class UnifiedSearchProvider implements IProvider {
 			'updated',
 			'desc',
 			false,
+			false,
 			$limit,
 		);
 		$result = $this->issueService->search($user->getUID(), $issueQuery);

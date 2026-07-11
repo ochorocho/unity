@@ -76,6 +76,19 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame(['t' => 'redmine', 'c' => 'r1', 'p' => ['id' => '55']], Ref::decode($issue->ref));
 	}
 
+	public function testSearchStatusFilterHonorsShowClosed(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, ['issues' => [], 'total_count' => 0]);
+		});
+		$this->client->search($this->connection, new IssueQuery());
+		$this->assertSame('open', $captured['query']['status_id'], 'closed hidden by default');
+
+		$this->client->search($this->connection, new IssueQuery(showClosed: true));
+		$this->assertSame('*', $captured['query']['status_id'], 'all statuses when showing closed');
+	}
+
 	public function testSearchByReferenceFetchesIssue(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
