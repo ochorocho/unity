@@ -14,12 +14,14 @@
 	"require-dev": {
 		"nextcloud/coding-standard": "^1.3.2",
 		"nextcloud/ocp": "dev-master",
+		"phpstan/phpstan": "^2",
 		"phpunit/phpunit": "^11.5"
 	},
 	"scripts": {
 		"lint": "find . -name \\*.php -not -path './vendor/*' -print0 | xargs -0 -n1 php -l",
 		"cs:check": "php-cs-fixer fix --dry-run --diff",
 		"cs:fix": "php-cs-fixer fix",
+		"phpstan": "phpstan analyse",
 		"test:unit": "phpunit --config tests/phpunit.xml"
 	},
 	"autoload": {
