@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 namespace OCA\Unity\Service\Tracker;
 
+use OCA\Unity\Model\Attachment;
 use OCA\Unity\Model\Comment;
 use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
@@ -61,6 +62,25 @@ interface TrackerClientInterface {
 	public function fetchFile(Connection $connection, array $refParts, string $src): array;
 
 	public function supportsTimeTracking(): bool;
+
+	/** Whether this tracker exposes a structured attachment list + upload. */
+	public function supportsAttachments(): bool;
+
+	/**
+	 * List an issue's attachments.
+	 *
+	 * @param array $refParts
+	 * @return Attachment[]
+	 */
+	public function getAttachments(Connection $connection, array $refParts): array;
+
+	/**
+	 * Upload a new attachment to an issue and return it.
+	 *
+	 * @param array $refParts
+	 * @param string $content raw file bytes
+	 */
+	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment;
 
 	/**
 	 * List stored time entries / worklogs for an issue.

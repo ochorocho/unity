@@ -214,4 +214,63 @@ class RedmineClientTest extends TestCase {
 		$this->expectException(TrackerException::class);
 		$this->client->fetchFile($this->connection, ['id' => '55'], 'https://evil.example/x.png');
 	}
+
+	public function testGetAttachmentsMapsList(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, ['issue' => ['id' => 55, 'attachments' => [[
+				'id' => 9, 'filename' => 'diagram.png', 'filesize' => 2048, 'content_type' => 'image/png',
+				'content_url' => 'https://redmine.example.com/attachments/download/9/diagram.png',
+				'thumbnail_url' => 'https://redmine.example.com/attachments/thumbnail/9',
+				'author' => ['name' => 'Alice'], 'created_on' => '2026-03-01T00:00:00Z',
+			]]]]);
+		});
+		$attachments = $this->client->getAttachments($this->connection, ['id' => '55']);
+		$this->assertSame('attachments', $captured['options']['query']['include']);
+		$this->assertStringContainsString('/issues/55.json', $captured['url']);
+		$this->assertCount(1, $attachments);
+		$this->assertSame('diagram.png', $attachments[0]->filename);
+		$this->assertSame('image/png', $attachments[0]->mimeType);
+		$this->assertSame(2048, $attachments[0]->size);
+		$this->assertSame('https://redmine.example.com/attachments/download/9/diagram.png', $attachments[0]->src);
+		$this->assertSame('https://redmine.example.com/attachments/thumbnail/9', $attachments[0]->thumbnailSrc);
+		$this->assertSame('Alice', $attachments[0]->author);
+	}
+
+	public function testUploadAttachmentTwoStep(): void {
+		$calls = [];
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$calls) {
+			$calls[] = ['method' => $m, 'url' => $u, 'options' => $o];
+			if (str_contains($u, '/uploads.json')) {
+				return $this->response(201, ['upload' => ['token' => 'tok-123']]);
+			}
+			if ($m === 'PUT') {
+				return $this->response(204, '');
+			}
+			// getAttachments re-fetch after the PUT
+			return $this->response(200, ['issue' => ['id' => 55, 'attachments' => [[
+				'id' => 12, 'filename' => 'notes.pdf', 'filesize' => 100, 'content_type' => 'application/pdf',
+				'content_url' => 'https://redmine.example.com/attachments/download/12/notes.pdf',
+			]]]]);
+		});
+
+		$att = $this->client->uploadAttachment($this->connection, ['id' => '55'], 'notes.pdf', 'application/pdf', 'BYTES');
+
+		$upload = $calls[0];
+		$this->assertSame('POST', $upload['method']);
+		$this->assertStringContainsString('/uploads.json?filename=notes.pdf', $upload['url']);
+		$this->assertSame('application/octet-stream', $upload['options']['headers']['Content-Type']);
+		$this->assertSame('BYTES', $upload['options']['body']);
+
+		$put = $calls[1];
+		$this->assertSame('PUT', $put['method']);
+		$body = json_decode($put['options']['body'], true);
+		$this->assertSame('tok-123', $body['issue']['uploads'][0]['token']);
+		$this->assertSame('notes.pdf', $body['issue']['uploads'][0]['filename']);
+		$this->assertSame('application/pdf', $body['issue']['uploads'][0]['content_type']);
+
+		$this->assertSame('notes.pdf', $att->filename);
+		$this->assertSame(100, $att->size);
+	}
 }

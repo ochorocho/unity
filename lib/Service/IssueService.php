@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace OCA\Unity\Service;
 
 use OCA\Unity\AppInfo\Application;
+use OCA\Unity\Model\Attachment;
 use OCA\Unity\Model\Comment;
 use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
@@ -124,6 +125,34 @@ class IssueService {
 	public function fetchFile(string $userId, string $ref, string $src): array {
 		[$client, $connection, $parts] = $this->resolve($userId, $ref);
 		return $client->fetchFile($connection, $parts, $src);
+	}
+
+	/**
+	 * List an issue's attachments plus whether this tracker supports them.
+	 *
+	 * @return array{supported: bool, attachments: Attachment[]}
+	 * @throws TrackerException
+	 */
+	public function getAttachments(string $userId, string $ref): array {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		$supported = $client->supportsAttachments();
+		return [
+			'supported' => $supported,
+			'attachments' => $supported ? $client->getAttachments($connection, $parts) : [],
+		];
+	}
+
+	/**
+	 * @throws TrackerException
+	 */
+	public function uploadAttachment(string $userId, string $ref, string $filename, string $mimeType, string $content): Attachment {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		if (!$client->supportsAttachments()) {
+			throw new TrackerException('Attachments are not supported for this tracker');
+		}
+		$attachment = $client->uploadAttachment($connection, $parts, $filename, $mimeType, $content);
+		$this->syncState->markTouched($userId, $ref);
+		return $attachment;
 	}
 
 	/**
