@@ -40,12 +40,13 @@ class IssueSyncService {
 
 	/** Entry point for the background job: sync every seen user with connections. */
 	public function run(): void {
-		$this->userManager->callForSeenUsers(function (IUser $user): void {
+		$this->userManager->callForSeenUsers(function (IUser $user): bool {
 			try {
 				$this->syncUser($user->getUID());
 			} catch (\Throwable $e) {
 				$this->logger->warning('Unity issue sync failed for ' . $user->getUID() . ': ' . $e->getMessage(), ['exception' => $e]);
 			}
+			return true;
 		});
 	}
 
@@ -248,7 +249,7 @@ class IssueSyncService {
 		} catch (\Throwable $e) {
 			return null;
 		}
-		$connId = $decoded['c'] ?? null;
-		return is_string($connId) && $connId !== '' ? $connId : null;
+		$connId = $decoded['c'];
+		return $connId !== '' ? $connId : null;
 	}
 }

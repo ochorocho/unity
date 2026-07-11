@@ -587,7 +587,7 @@ class JiraClient extends AbstractTrackerClient {
 			default => 'updated',
 		};
 		$direction = strtolower($query->order) === 'asc' ? 'ASC' : 'DESC';
-		$jql .= ($jql === '' ? '' : ' ') . 'ORDER BY ' . $field . ' ' . $direction;
+		$jql .= ' ORDER BY ' . $field . ' ' . $direction;
 		return $jql;
 	}
 
