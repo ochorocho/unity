@@ -272,23 +272,41 @@ class RedmineClient extends AbstractTrackerClient {
 			], $connection),
 			'Get time entries',
 		);
+		$currentUserId = $this->currentUserId($connection);
 		$records = [];
 		foreach (($data['time_entries'] ?? []) as $raw) {
 			if (!is_array($raw)) {
 				continue;
 			}
 			$hours = (float)($raw['hours'] ?? 0);
+			// Only the author may edit/delete their own entry.
+			$own = $currentUserId !== '' && (string)($raw['user']['id'] ?? '') === $currentUserId;
 			$records[] = new TimeRecord(
 				(string)($raw['id'] ?? ''),
 				(string)($raw['user']['name'] ?? ''),
 				(int)round($hours * 3600),
 				$raw['spent_on'] ?? null,
 				(string)($raw['comments'] ?? ''),
-				editable: true,
-				deletable: true,
+				editable: $own,
+				deletable: $own,
 			);
 		}
 		return $records;
+	}
+
+	/** The connection user's own Redmine user id, or '' if it can't be resolved. */
+	private function currentUserId(Connection $connection): string {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/users/current.json', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Get current user',
+			);
+			return (string)($data['user']['id'] ?? '');
+		} catch (TrackerException $e) {
+			return '';
+		}
 	}
 
 	public function updateTime(Connection $connection, array $refParts, string $recordId, int $seconds, string $comment, ?string $startedAt): void {

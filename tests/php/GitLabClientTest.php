@@ -77,19 +77,29 @@ class GitLabClientTest extends TestCase {
 	public function testGetTimeRecordsViaGraphQL(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (!str_contains($u, '/api/graphql')) {
+				// REST GET /user → the connection's own account.
+				return $this->response(200, ['username' => 'alice']);
+			}
 			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
 			return $this->response(200, ['data' => ['project' => ['issue' => ['timelogs' => ['nodes' => [
-				['timeSpent' => 3600, 'spentAt' => '2026-02-01T00:00:00Z', 'summary' => 'work', 'user' => ['name' => 'Alice']],
+				['id' => 'gid://gitlab/Timelog/5', 'timeSpent' => 3600, 'spentAt' => '2026-02-01T00:00:00Z', 'summary' => 'work', 'user' => ['name' => 'Alice', 'username' => 'alice']],
+				['id' => 'gid://gitlab/Timelog/6', 'timeSpent' => 1800, 'spentAt' => '2026-02-02T00:00:00Z', 'summary' => 'other', 'user' => ['name' => 'Bob', 'username' => 'bob']],
 			]]]]]]);
 		});
 		$records = $this->client->getTimeRecords($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app']);
 		$this->assertSame('POST', $captured['method']);
 		$this->assertStringContainsString('/api/graphql', $captured['url']);
 		$this->assertStringStartsWith('Bearer ', $captured['options']['headers']['Authorization']);
-		$this->assertCount(1, $records);
+		$this->assertCount(2, $records);
 		$this->assertSame('Alice', $records[0]->author);
 		$this->assertSame(3600, $records[0]->seconds);
 		$this->assertSame('work', $records[0]->comment);
+		// GitLab can't edit a timelog in place, so editable is always false.
+		$this->assertFalse($records[0]->editable);
+		// alice owns the first timelog → deletable; Bob's is not deletable.
+		$this->assertTrue($records[0]->deletable);
+		$this->assertFalse($records[1]->deletable);
 	}
 
 	public function testGetTimeRecordsEmptyWithoutPath(): void {

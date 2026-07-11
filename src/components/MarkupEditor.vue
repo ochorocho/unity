@@ -72,7 +72,9 @@ export default {
 	components: { NcEmojiPicker, RenderedText },
 	props: {
 		modelValue: { type: String, default: '' },
-		syntax: { type: String, default: 'markdown' },
+		// The tracker body format ('markdown' | 'textile' | 'html' | 'plaintext').
+		// Drives both the toolbar syntax and how the Preview tab renders.
+		format: { type: String, default: 'markdown' },
 		issueRef: { type: String, default: '' },
 		tracker: { type: String, default: '' },
 		placeholder: { type: String, default: '' },
@@ -86,11 +88,21 @@ export default {
 		}
 	},
 	computed: {
+		// Toolbar snippets only come in markdown and textile flavours; anything
+		// that isn't textile (markdown, html, plaintext) uses the markdown toolbar.
+		syntax() {
+			return this.format === 'textile' ? 'textile' : 'markdown'
+		},
 		toolbar() {
 			return toolbarFor(this.syntax)
 		},
+		// Preview must match how the saved body is displayed, so an HTML body
+		// (e.g. Jira Server/DC) renders as HTML instead of showing raw tags.
 		previewFormat() {
-			return this.syntax === 'textile' ? 'textile' : 'markdown'
+			if (this.format === 'html') {
+				return 'html'
+			}
+			return this.format === 'textile' ? 'textile' : 'markdown'
 		},
 		useShortcodes() {
 			return trackerById(this.tracker).emojiShortcodes

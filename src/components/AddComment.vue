@@ -1,7 +1,7 @@
 <template>
 	<div class="unity-add-comment">
 		<MarkupEditor v-model="body"
-			:syntax="syntax"
+			:format="format"
 			:issue-ref="issueRef"
 			:tracker="tracker"
 			:placeholder="t('unity', 'Write a comment…')"
@@ -37,11 +37,6 @@ export default {
 			body: '',
 			submitting: false,
 		}
-	},
-	computed: {
-		syntax() {
-			return this.format === 'textile' ? 'textile' : 'markdown'
-		},
 	},
 	methods: {
 		async submit() {

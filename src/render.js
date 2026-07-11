@@ -68,3 +68,15 @@ export function renderTextile(text, ref) {
 export function renderHtml(html, ref) {
 	return sanitizeHtml(html || '', ref)
 }
+
+/**
+ * Strip all markup from a possibly-HTML string, leaving only its visible text.
+ * Used for compact, single-line contexts (e.g. the time-entry list) where a
+ * tracker may return an HTML body that would otherwise leak raw tags.
+ *
+ * @param {string} html untrusted HTML or plain text
+ * @return {string} plain text with all tags removed
+ */
+export function stripHtml(html) {
+	return DOMPurify.sanitize(html || '', { ALLOWED_TAGS: [], ALLOWED_ATTR: [] })
+}

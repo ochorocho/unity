@@ -445,22 +445,48 @@ class JiraClient extends AbstractTrackerClient {
 			], $connection),
 			'Get worklogs',
 		);
+		$server = $this->isServer($connection);
+		$me = $this->currentUserKey($connection);
 		$records = [];
 		foreach (($data['worklogs'] ?? []) as $raw) {
 			if (!is_array($raw)) {
 				continue;
 			}
+			// Cloud identifies users by accountId, Server/DC by name. Only the
+			// worklog author may edit/delete it.
+			$authorKey = $server ? (string)($raw['author']['name'] ?? '') : (string)($raw['author']['accountId'] ?? '');
+			$own = $me !== '' && $authorKey === $me;
 			$records[] = new TimeRecord(
 				(string)($raw['id'] ?? ''),
 				(string)($raw['author']['displayName'] ?? ''),
 				(int)($raw['timeSpentSeconds'] ?? 0),
 				$raw['started'] ?? null,
 				$this->decodeBody($connection, $raw['comment'] ?? null),
-				editable: true,
-				deletable: true,
+				editable: $own,
+				deletable: $own,
 			);
 		}
 		return $records;
+	}
+
+	/**
+	 * The connection user's own identity as worklog authors are keyed: the
+	 * accountId on Cloud, the username on Server/DC. Returns '' if unresolved.
+	 */
+	private function currentUserKey(Connection $connection): string {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/myself', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Resolve current user',
+			);
+			return $this->isServer($connection)
+				? (string)($data['name'] ?? '')
+				: (string)($data['accountId'] ?? '');
+		} catch (TrackerException $e) {
+			return '';
+		}
 	}
 
 	/**

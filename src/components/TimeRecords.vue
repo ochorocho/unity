@@ -1,38 +1,55 @@
 <template>
 	<div class="unity-records">
 		<NcLoadingIcon v-if="loading" :size="20" />
-		<ul v-else-if="records.length" class="unity-records-list">
-			<li v-for="r in records" :key="r.id" class="unity-record">
-				<div class="unity-record-main">
-					<span class="unity-record-head">
-						<strong>{{ humanize(r.seconds) }}</strong>
-						<span v-if="r.author" class="unity-record-author">· {{ r.author }}</span>
-						<span v-if="r.date" class="unity-record-date">· {{ formatDate(r.date) }}</span>
-					</span>
-					<span v-if="r.comment" class="unity-record-comment">{{ r.comment }}</span>
-				</div>
-				<div v-if="r.editable || r.deletable" class="unity-record-actions">
-					<NcButton v-if="r.editable"
-						type="tertiary"
-						:aria-label="t('unity', 'Edit time entry')"
-						:title="t('unity', 'Edit time entry')"
-						@click="$emit('edit', r)">
-						<template #icon><Pencil :size="18" /></template>
-					</NcButton>
-					<NcButton v-if="r.deletable"
-						type="tertiary"
-						:aria-label="t('unity', 'Delete time entry')"
-						:title="t('unity', 'Delete time entry')"
-						:disabled="deletingId === r.id"
-						@click="remove(r)">
-						<template #icon>
-							<NcLoadingIcon v-if="deletingId === r.id" :size="18" />
-							<Delete v-else :size="18" />
-						</template>
-					</NcButton>
-				</div>
-			</li>
-		</ul>
+		<template v-else-if="records.length">
+			<ul class="unity-records-list">
+				<li v-for="r in pagedRecords" :key="r.id" class="unity-record">
+					<div class="unity-record-main">
+						<span class="unity-record-head">
+							<strong>{{ humanize(r.seconds) }}</strong>
+							<span v-if="r.author" class="unity-record-author">· {{ r.author }}</span>
+							<span v-if="r.date" class="unity-record-date">· {{ formatDate(r.date) }}</span>
+						</span>
+						<span v-if="stripHtml(r.comment)" class="unity-record-comment">{{ stripHtml(r.comment) }}</span>
+					</div>
+					<div v-if="r.editable || r.deletable" class="unity-record-actions">
+						<NcButton v-if="r.editable"
+							type="tertiary"
+							:aria-label="t('unity', 'Edit time entry')"
+							:title="t('unity', 'Edit time entry')"
+							@click="$emit('edit', r)">
+							<template #icon><Pencil :size="18" /></template>
+						</NcButton>
+						<NcButton v-if="r.deletable"
+							type="tertiary"
+							:aria-label="t('unity', 'Delete time entry')"
+							:title="t('unity', 'Delete time entry')"
+							:disabled="deletingId === r.id"
+							@click="remove(r)">
+							<template #icon>
+								<NcLoadingIcon v-if="deletingId === r.id" :size="18" />
+								<Delete v-else :size="18" />
+							</template>
+						</NcButton>
+					</div>
+				</li>
+			</ul>
+			<div v-if="pageCount > 1" class="unity-records-pager">
+				<NcButton type="tertiary"
+					:disabled="safePage === 0"
+					:aria-label="t('unity', 'Previous page')"
+					@click="prev">
+					<template #icon><ChevronLeft :size="18" /></template>
+				</NcButton>
+				<span class="unity-records-page">{{ t('unity', 'Page {current} of {total}', { current: safePage + 1, total: pageCount }) }}</span>
+				<NcButton type="tertiary"
+					:disabled="safePage >= pageCount - 1"
+					:aria-label="t('unity', 'Next page')"
+					@click="next">
+					<template #icon><ChevronRight :size="18" /></template>
+				</NcButton>
+			</div>
+		</template>
 		<p v-else class="unity-records-empty">{{ t('unity', 'No individual time records.') }}</p>
 	</div>
 </template>
@@ -46,11 +63,17 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import Pencil from 'vue-material-design-icons/Pencil.vue'
 import Delete from 'vue-material-design-icons/Delete.vue'
+import ChevronLeft from 'vue-material-design-icons/ChevronLeft.vue'
+import ChevronRight from 'vue-material-design-icons/ChevronRight.vue'
 import { humanizeDuration } from '../duration.js'
+import { stripHtml } from '../render.js'
+
+/** Number of time entries shown per page. */
+const PAGE_SIZE = 5
 
 export default {
 	name: 'TimeRecords',
-	components: { NcButton, NcLoadingIcon, Pencil, Delete },
+	components: { NcButton, NcLoadingIcon, Pencil, Delete, ChevronLeft, ChevronRight },
 	props: {
 		issueRef: { type: String, required: true },
 		reloadKey: { type: Number, default: 0 },
@@ -61,13 +84,33 @@ export default {
 			records: [],
 			loading: false,
 			deletingId: null,
+			page: 0,
 		}
+	},
+	computed: {
+		// Newest entries first, so "page 1" always shows the latest work.
+		sortedRecords() {
+			return [...this.records].sort((a, b) => this.dateValue(b.date) - this.dateValue(a.date))
+		},
+		pageCount() {
+			return Math.max(1, Math.ceil(this.sortedRecords.length / PAGE_SIZE))
+		},
+		// Guard against a page index left dangling after records shrink.
+		safePage() {
+			return Math.min(this.page, this.pageCount - 1)
+		},
+		pagedRecords() {
+			const start = this.safePage * PAGE_SIZE
+			return this.sortedRecords.slice(start, start + PAGE_SIZE)
+		},
 	},
 	watch: {
 		issueRef() {
+			this.page = 0
 			this.fetch()
 		},
 		reloadKey() {
+			this.page = 0
 			this.fetch()
 		},
 	},
@@ -75,8 +118,23 @@ export default {
 		this.fetch()
 	},
 	methods: {
+		stripHtml,
 		humanize(seconds) {
 			return humanizeDuration(seconds)
+		},
+		dateValue(value) {
+			const ms = value ? moment(value).valueOf() : 0
+			return Number.isNaN(ms) ? 0 : ms
+		},
+		prev() {
+			if (this.safePage > 0) {
+				this.page = this.safePage - 1
+			}
+		},
+		next() {
+			if (this.safePage < this.pageCount - 1) {
+				this.page = this.safePage + 1
+			}
 		},
 		formatDate(value) {
 			return value ? moment(value).format('ll') : ''
@@ -170,5 +228,16 @@ export default {
 	color: var(--color-text-maxcontrast);
 	font-size: 0.9em;
 	margin-top: 6px;
+}
+.unity-records-pager {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+.unity-records-page {
+	color: var(--color-text-maxcontrast);
+	font-size: 0.85em;
 }
 </style>

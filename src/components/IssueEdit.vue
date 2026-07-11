@@ -4,7 +4,7 @@
 		<NcTextField v-model="form.title" :label="t('unity', 'Title')" />
 
 		<label class="unity-edit-label">{{ t('unity', 'Description') }}</label>
-		<MarkupEditor v-model="form.description" :syntax="syntax" :issue-ref="issue.ref" :tracker="issue.tracker" :rows="8" />
+		<MarkupEditor v-model="form.description" :format="issue.bodyFormat" :issue-ref="issue.ref" :tracker="issue.tracker" :rows="8" />
 
 		<template v-if="meta">
 			<div v-if="meta.capabilities.status" class="unity-edit-field">
@@ -75,9 +75,6 @@ export default {
 		}
 	},
 	computed: {
-		syntax() {
-			return this.issue.bodyFormat === 'textile' ? 'textile' : 'markdown'
-		},
 		labelOptions() {
 			return (this.meta?.labels || []).map((l) => l.name)
 		},

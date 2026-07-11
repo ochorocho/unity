@@ -307,21 +307,32 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('31', json_decode($transition['options']['body'], true)['transition']['id']);
 	}
 
-	public function testGetTimeRecordsMapsWorklogs(): void {
-		$this->httpClient->method('request')->willReturn($this->response(200, [
-			'worklogs' => [[
-				'id' => '100',
-				'author' => ['displayName' => 'Alice'],
-				'timeSpentSeconds' => 5400,
-				'started' => '2026-02-01T09:00:00.000+0000',
-				'comment' => ['type' => 'doc', 'version' => 1, 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'did work']]]]],
-			]],
-		]));
+	public function testGetTimeRecordsMapsWorklogsAndGatesOwnership(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/myself')) {
+				return $this->response(200, ['accountId' => 'acc-me']);
+			}
+			return $this->response(200, [
+				'worklogs' => [
+					['id' => '100', 'author' => ['displayName' => 'Alice', 'accountId' => 'acc-me'],
+						'timeSpentSeconds' => 5400, 'started' => '2026-02-01T09:00:00.000+0000',
+						'comment' => ['type' => 'doc', 'version' => 1, 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'did work']]]]]],
+					['id' => '101', 'author' => ['displayName' => 'Bob', 'accountId' => 'acc-bob'],
+						'timeSpentSeconds' => 3600, 'started' => '2026-02-02T09:00:00.000+0000'],
+				],
+			]);
+		});
 		$records = $this->jira->getTimeRecords($this->connection, ['key' => 'ABC-1']);
-		$this->assertCount(1, $records);
+		$this->assertCount(2, $records);
 		$this->assertSame('Alice', $records[0]->author);
 		$this->assertSame(5400, $records[0]->seconds);
 		$this->assertSame('did work', $records[0]->comment);
+		// The connection user (acc-me) authored the first worklog.
+		$this->assertTrue($records[0]->editable);
+		$this->assertTrue($records[0]->deletable);
+		// Bob's worklog is not owned by the connection user.
+		$this->assertFalse($records[1]->editable);
+		$this->assertFalse($records[1]->deletable);
 	}
 
 	public function testLogTimeViaTempoWhenTempoTokenPresent(): void {

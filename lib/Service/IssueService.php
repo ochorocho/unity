@@ -175,6 +175,7 @@ class IssueService {
 		if (!$client->supportsTimeTracking()) {
 			throw new TrackerException('Time tracking is not supported for this tracker');
 		}
+		$this->assertRecordAllows($client, $connection, $parts, $recordId, 'edit');
 		$client->updateTime($connection, $parts, $recordId, $seconds, $comment, $startedAt);
 		$this->syncState->markTouched($userId, $ref);
 	}
@@ -187,8 +188,34 @@ class IssueService {
 		if (!$client->supportsTimeTracking()) {
 			throw new TrackerException('Time tracking is not supported for this tracker');
 		}
+		$this->assertRecordAllows($client, $connection, $parts, $recordId, 'delete');
 		$client->deleteTime($connection, $parts, $recordId);
 		$this->syncState->markTouched($userId, $ref);
+	}
+
+	/**
+	 * Server-side guard so a user can only edit/delete their own time entries.
+	 * The per-tracker getTimeRecords() decides ownership (comparing the record's
+	 * author to the connection's remote account) and exposes it as editable/
+	 * deletable flags; here we re-check the target record against those flags
+	 * before forwarding the write to the tracker.
+	 *
+	 * @param array<string, mixed> $parts
+	 * @param 'edit'|'delete' $operation
+	 * @throws TrackerException when the record is missing or not owned
+	 */
+	private function assertRecordAllows(TrackerClientInterface $client, Connection $connection, array $parts, string $recordId, string $operation): void {
+		foreach ($client->getTimeRecords($connection, $parts) as $record) {
+			if ($record->id !== $recordId) {
+				continue;
+			}
+			$allowed = $operation === 'edit' ? $record->editable : $record->deletable;
+			if (!$allowed) {
+				throw new TrackerException('You can only ' . $operation . ' your own time entries');
+			}
+			return;
+		}
+		throw new TrackerException('Time entry not found');
 	}
 
 	private function cachedSearch(

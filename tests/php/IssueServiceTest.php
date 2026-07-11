@@ -12,6 +12,7 @@ use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
 use OCA\Unity\Model\IssueQuery;
 use OCA\Unity\Model\Ref;
+use OCA\Unity\Model\TimeRecord;
 use OCA\Unity\Model\TrackerSearchResult;
 use OCA\Unity\Service\ConnectionService;
 use OCA\Unity\Service\IssueService;
@@ -89,6 +90,33 @@ class IssueServiceTest extends TestCase {
 		$this->client->expects($this->never())->method('logTime');
 		$this->expectException(TrackerException::class);
 		$this->service->logTime('admin', Ref::encode('github', 'c1', ['owner' => 'o']), 3600, '', null);
+	}
+
+	public function testUpdateTimeRejectsRecordNotOwnedByUser(): void {
+		$this->client->method('supportsTimeTracking')->willReturn(true);
+		$this->client->method('getTimeRecords')->willReturn([
+			new TimeRecord('42', 'Bob', 3600, '2026-02-01', '', editable: false, deletable: false),
+		]);
+		$this->client->expects($this->never())->method('updateTime');
+		$this->expectException(TrackerException::class);
+		$this->service->updateTime('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '42', 3600, '', null);
+	}
+
+	public function testDeleteTimeRejectsMissingRecord(): void {
+		$this->client->method('supportsTimeTracking')->willReturn(true);
+		$this->client->method('getTimeRecords')->willReturn([]);
+		$this->client->expects($this->never())->method('deleteTime');
+		$this->expectException(TrackerException::class);
+		$this->service->deleteTime('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '42');
+	}
+
+	public function testDeleteTimeForwardsWhenOwned(): void {
+		$this->client->method('supportsTimeTracking')->willReturn(true);
+		$this->client->method('getTimeRecords')->willReturn([
+			new TimeRecord('42', 'Alice', 3600, '2026-02-01', '', editable: true, deletable: true),
+		]);
+		$this->client->expects($this->once())->method('deleteTime');
+		$this->service->deleteTime('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '42');
 	}
 
 	public function testMergesAndSortsByTitle(): void {

@@ -352,9 +352,10 @@ class GitLabClient extends AbstractTrackerClient {
 		// GitLab exposes individual timelogs only via GraphQL (REST has just the total).
 		$query = 'query($fullPath: ID!, $iid: String!) {'
 			. ' project(fullPath: $fullPath) { issue(iid: $iid) {'
-			. ' timelogs { nodes { id timeSpent spentAt summary user { name } } } } } }';
+			. ' timelogs { nodes { id timeSpent spentAt summary user { name username } } } } } }';
 		$data = $this->graphql($connection, $query, ['fullPath' => $path, 'iid' => $iid], 'Get timelogs');
 		$nodes = $data['data']['project']['issue']['timelogs']['nodes'] ?? [];
+		$currentUsername = $this->currentUsername($connection);
 		$records = [];
 		foreach ($nodes as $node) {
 			if (!is_array($node)) {
@@ -364,6 +365,8 @@ class GitLabClient extends AbstractTrackerClient {
 			// numeric part so it survives as a URL path segment, and rebuild the gid
 			// in deleteTime().
 			$numericId = (string)preg_replace('#^.*/#', '', (string)($node['id'] ?? ''));
+			// Only the author may delete their own timelog.
+			$own = $currentUsername !== '' && (string)($node['user']['username'] ?? '') === $currentUsername;
 			$records[] = new TimeRecord(
 				$numericId,
 				(string)($node['user']['name'] ?? ''),
@@ -372,10 +375,25 @@ class GitLabClient extends AbstractTrackerClient {
 				(string)($node['summary'] ?? ''),
 				// GitLab's API cannot edit a timelog in place, only delete it.
 				editable: false,
-				deletable: $numericId !== '',
+				deletable: $own && $numericId !== '',
 			);
 		}
 		return $records;
+	}
+
+	/** The connection user's own GitLab username, or '' if it can't be resolved. */
+	private function currentUsername(Connection $connection): string {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/user', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Get current user',
+			);
+			return (string)($data['username'] ?? '');
+		} catch (TrackerException $e) {
+			return '';
+		}
 	}
 
 	public function deleteTime(Connection $connection, array $refParts, string $recordId): void {

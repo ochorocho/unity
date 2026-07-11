@@ -156,20 +156,33 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame('markdown', $result->issues[0]->bodyFormat);
 	}
 
-	public function testGetTimeRecordsMapsEntries(): void {
-		$this->http->method('request')->willReturn($this->response(200, [
-			'time_entries' => [[
-				'id' => 7, 'user' => ['name' => 'Alice'], 'hours' => 1.5,
-				'spent_on' => '2026-02-01', 'comments' => 'did work',
-			]],
-			'total_count' => 1,
-		]));
+	public function testGetTimeRecordsMapsEntriesAndGatesOwnership(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/users/current.json')) {
+				return $this->response(200, ['user' => ['id' => 42, 'name' => 'Alice']]);
+			}
+			return $this->response(200, [
+				'time_entries' => [
+					['id' => 7, 'user' => ['id' => 42, 'name' => 'Alice'], 'hours' => 1.5,
+						'spent_on' => '2026-02-01', 'comments' => 'did work'],
+					['id' => 8, 'user' => ['id' => 99, 'name' => 'Bob'], 'hours' => 1,
+						'spent_on' => '2026-02-02', 'comments' => 'other work'],
+				],
+				'total_count' => 2,
+			]);
+		});
 		$records = $this->client->getTimeRecords($this->connection, ['id' => '55']);
-		$this->assertCount(1, $records);
+		$this->assertCount(2, $records);
 		$this->assertSame('Alice', $records[0]->author);
 		$this->assertSame(5400, $records[0]->seconds);
 		$this->assertSame('2026-02-01', $records[0]->date);
 		$this->assertSame('did work', $records[0]->comment);
+		// Alice is the connection user → her own entry is editable/deletable.
+		$this->assertTrue($records[0]->editable);
+		$this->assertTrue($records[0]->deletable);
+		// Bob's entry is not owned by the connection user.
+		$this->assertFalse($records[1]->editable);
+		$this->assertFalse($records[1]->deletable);
 	}
 
 	public function testFetchFileResolvesRelativeAttachment(): void {
