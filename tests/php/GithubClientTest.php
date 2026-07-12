@@ -174,6 +174,35 @@ class GithubClientTest extends TestCase {
 		$this->assertFalse($meta['capabilities']['type']);
 	}
 
+	public function testGetCreateMetaFiltersReposByQuery(): void {
+		$this->http->method('request')->willReturnCallback(fn ($m, $u, $o) => $this->response(200, [
+			['full_name' => 'octocat/Hello-World', 'has_issues' => true, 'permissions' => ['push' => true]],
+			['full_name' => 'octocat/Spoon-Knife', 'has_issues' => true, 'permissions' => ['push' => true]],
+		]));
+		$meta = $this->client->getCreateMeta($this->connection, 'spoon');
+		$this->assertCount(1, $meta['projects'], 'case-insensitive substring match on the repo name');
+		$this->assertSame('octocat/Spoon-Knife', $meta['projects'][0]['id']);
+	}
+
+	public function testGetCreateMetaPagesThroughReposWhenSearching(): void {
+		// A search must follow the Link header past the recent-100 window so an older
+		// repo (here on page 2) is still found.
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			$page = $o['query']['page'] ?? '1';
+			if ($page === '1') {
+				return $this->response(
+					200,
+					[['full_name' => 'ochorocho/recent', 'has_issues' => true, 'permissions' => ['push' => true]]],
+					['Link' => '<https://api.github.com/user/repos?page=2>; rel="next"'],
+				);
+			}
+			return $this->response(200, [['full_name' => 'ochorocho/shippy', 'has_issues' => true, 'permissions' => ['push' => true]]]);
+		});
+		$meta = $this->client->getCreateMeta($this->connection, 'shippy');
+		$this->assertCount(1, $meta['projects']);
+		$this->assertSame('ochorocho/shippy', $meta['projects'][0]['id']);
+	}
+
 	public function testCreateIssuePostsToRepo(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

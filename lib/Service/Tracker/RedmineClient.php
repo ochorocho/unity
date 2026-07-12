@@ -218,7 +218,7 @@ class RedmineClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null): array {
 		// Redmine trackers are global (shared by all projects).
 		$types = [];
 		try {
@@ -253,7 +253,8 @@ class RedmineClient extends AbstractTrackerClient {
 			$total = (int)($data['total_count'] ?? 0);
 			$offset += 100;
 		} while ($offset < $total && $offset < 500);
-		return ['projects' => $projects, 'capabilities' => ['type' => $types !== [], 'typeRequired' => $types !== []]];
+		// Redmine's /projects.json has no name-search param, so narrow the list here.
+		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => $types !== [], 'typeRequired' => $types !== []]];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {

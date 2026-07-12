@@ -25,10 +25,15 @@
 				<template v-if="meta && !loadingMeta">
 					<div class="unity-create-field">
 						<label class="unity-create-label">{{ projectLabel }}</label>
-						<select v-model="projectId" class="unity-create-select">
-							<option value="" disabled>{{ t('unity', 'Choose a project') }}</option>
-							<option v-for="p in meta.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-						</select>
+						<NcSelect v-model="projectSelection"
+							:options="projectOptions"
+							label="name"
+							:clearable="false"
+							:filterable="false"
+							:loading="projectsLoading"
+							:placeholder="t('unity', 'Search projects')"
+							:aria-label-combobox="projectLabel"
+							@search="onProjectSearch" />
 						<p v-if="meta.projects.length === 0" class="unity-create-hint">
 							{{ t('unity', 'No projects available for this connection.') }}
 						</p>
@@ -79,12 +84,13 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
 import MarkupEditor from './MarkupEditor.vue'
 import { trackerById, createBodyFormat } from '../trackers.js'
 
 export default {
 	name: 'IssueCreate',
-	components: { NcDialog, NcButton, NcTextField, NcLoadingIcon, NcNoteCard, MarkupEditor },
+	components: { NcDialog, NcButton, NcTextField, NcLoadingIcon, NcNoteCard, NcSelect, MarkupEditor },
 	props: {
 		connections: { type: Array, default: () => [] },
 		// The connection to preselect ('' = "All connections" → user must pick).
@@ -97,7 +103,12 @@ export default {
 			meta: null,
 			loadingMeta: false,
 			metaError: '',
-			projectId: '',
+			// The selected project object (NcSelect binds the whole option, not just the id).
+			projectSelection: null,
+			// Options shown in the project dropdown; refreshed from the API as the user types.
+			projectOptions: [],
+			projectsLoading: false,
+			projectSearchTimer: null,
 			typeId: '',
 			title: '',
 			description: '',
@@ -118,7 +129,11 @@ export default {
 			return createBodyFormat(this.selectedTracker)
 		},
 		selectedProject() {
-			return this.meta ? this.meta.projects.find((p) => p.id === this.projectId) : null
+			return this.projectSelection
+		},
+		// The plain project id string used by canCreate and the create request.
+		projectId() {
+			return this.projectSelection ? this.projectSelection.id : ''
 		},
 		currentTypes() {
 			return this.selectedProject ? (this.selectedProject.types || []) : []
@@ -138,6 +153,12 @@ export default {
 			return true
 		},
 	},
+	watch: {
+		// Types are project-specific; clear a stale selection when the project changes.
+		projectSelection() {
+			this.typeId = ''
+		},
+	},
 	mounted() {
 		const preselectOk = this.preselected && this.creatableConnections.some((c) => c.id === this.preselected)
 		if (preselectOk) {
@@ -151,7 +172,8 @@ export default {
 	},
 	methods: {
 		onConnectionChange() {
-			this.projectId = ''
+			this.projectSelection = null
+			this.projectOptions = []
 			this.typeId = ''
 			this.loadMeta()
 		},
@@ -168,6 +190,7 @@ export default {
 				})
 				if (data && Array.isArray(data.projects)) {
 					this.meta = data
+					this.projectOptions = data.projects
 				} else {
 					this.metaError = (data && data.error) || this.t('unity', 'Could not load projects')
 				}
@@ -175,6 +198,38 @@ export default {
 				this.metaError = e?.response?.data?.error || this.t('unity', 'Could not load projects')
 			} finally {
 				this.loadingMeta = false
+			}
+		},
+		// Fired by NcSelect as the user types. Debounce, then ask the API for matching
+		// projects (server-side search) rather than filtering the initial list client-side.
+		onProjectSearch(search) {
+			clearTimeout(this.projectSearchTimer)
+			const query = (search || '').trim()
+			if (query === '') {
+				// Empty query: restore the initial (unfiltered) list without a round-trip.
+				this.projectOptions = this.meta ? this.meta.projects : []
+				this.projectsLoading = false
+				return
+			}
+			this.projectsLoading = true
+			this.projectSearchTimer = setTimeout(() => this.searchProjects(query), 300)
+		},
+		async searchProjects(query) {
+			if (!this.connectionId) {
+				return
+			}
+			this.projectsLoading = true
+			try {
+				const { data } = await axios.get(generateUrl('/apps/unity/create-meta'), {
+					params: { connection: this.connectionId, query },
+				})
+				if (data && Array.isArray(data.projects)) {
+					this.projectOptions = data.projects
+				}
+			} catch (e) {
+				// Keep the current options on a transient search error.
+			} finally {
+				this.projectsLoading = false
 			}
 		},
 		async submit() {

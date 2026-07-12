@@ -222,18 +222,24 @@ class GitLabClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+		$params = [
+			'membership' => 'true',
+			'simple' => 'true',
+			// 30 = Developer, the minimum access level that can create issues.
+			'min_access_level' => '30',
+			'per_page' => '100',
+			'order_by' => 'last_activity_at',
+		];
+		// GitLab's /projects endpoint searches names/paths natively, so the query
+		// reaches beyond the first page of results.
+		if ($query !== null && trim($query) !== '') {
+			$params['search'] = trim($query);
+		}
 		$data = $this->json(
 			$this->request('GET', $this->apiRoot($connection) . '/projects', [
 				'headers' => $this->defaultHeaders($connection),
-				'query' => [
-					'membership' => 'true',
-					'simple' => 'true',
-					// 30 = Developer, the minimum access level that can create issues.
-					'min_access_level' => '30',
-					'per_page' => '100',
-					'order_by' => 'last_activity_at',
-				],
+				'query' => $params,
 			], $connection),
 			'Projects',
 		);

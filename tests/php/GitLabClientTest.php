@@ -283,6 +283,16 @@ class GitLabClientTest extends TestCase {
 		$this->assertFalse($meta['capabilities']['type']);
 	}
 
+	public function testGetCreateMetaPassesSearchQuery(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, [['id' => 42, 'name_with_namespace' => 'Group / App']]);
+		});
+		$this->client->getCreateMeta($this->connection, 'app');
+		$this->assertSame('app', $captured['options']['query']['search']);
+	}
+
 	public function testCreateIssuePostsTitleAndDescription(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

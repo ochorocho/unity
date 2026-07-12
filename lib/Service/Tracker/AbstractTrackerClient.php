@@ -51,8 +51,27 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	 *
 	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
 	 */
-	public function getCreateMeta(Connection $connection): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null): array {
 		throw new TrackerException('Creating issues is not supported for this tracker');
+	}
+
+	/**
+	 * Case-insensitive substring filter over normalized project entries. Used by
+	 * trackers whose provider API has no server-side project search of its own, so
+	 * the query typed in the create dialog still narrows the list.
+	 *
+	 * @param list<array{id: string, name: string, types: list<array{id: string, name: string}>}> $projects
+	 * @param string|null $query
+	 * @return list<array{id: string, name: string, types: list<array{id: string, name: string}>}>
+	 */
+	protected function filterProjectsByQuery(array $projects, ?string $query): array {
+		$query = $query === null ? '' : trim($query);
+		if ($query === '') {
+			return $projects;
+		}
+		return array_values(array_filter($projects, static function (array $p) use ($query): bool {
+			return stripos($p['name'], $query) !== false || stripos($p['id'], $query) !== false;
+		}));
 	}
 
 	/**

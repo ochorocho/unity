@@ -208,33 +208,47 @@ class GithubClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection): array {
-		$data = $this->json(
-			$this->request('GET', $this->apiRoot($connection) . '/user/repos', [
+	/** Hard cap on /user/repos pages walked during a search (100 repos each). */
+	private const REPO_SEARCH_MAX_PAGES = 10;
+
+	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+		$hasQuery = $query !== null && trim($query) !== '';
+		// /user/repos returns the 100 most-recently-updated repos per page and has no
+		// text-search param. Without a term the first page is plenty for the dropdown;
+		// with a term we page through the full list so a match outside the recent 100
+		// (e.g. an older repo) is still found, then filter locally.
+		$maxPages = $hasQuery ? self::REPO_SEARCH_MAX_PAGES : 1;
+		$projects = [];
+		$page = '1';
+		$pagesWalked = 0;
+		do {
+			$response = $this->request('GET', $this->apiRoot($connection) . '/user/repos', [
 				'headers' => $this->defaultHeaders($connection),
 				'query' => [
 					'per_page' => '100',
+					'page' => $page,
 					'sort' => 'updated',
 					'affiliation' => 'owner,collaborator,organization_member',
 				],
-			], $connection),
-			'Repositories',
-		);
-		$projects = [];
-		foreach ($data as $raw) {
-			if (!is_array($raw)) {
-				continue;
+			], $connection);
+			$data = $this->json($response, 'Repositories');
+			foreach ($data as $raw) {
+				if (!is_array($raw)) {
+					continue;
+				}
+				// Only repos that have issues enabled and where the user can write.
+				if (($raw['has_issues'] ?? true) !== true || ($raw['permissions']['push'] ?? true) !== true) {
+					continue;
+				}
+				$full = (string)($raw['full_name'] ?? '');
+				if ($full !== '') {
+					$projects[] = ['id' => $full, 'name' => $full, 'types' => []];
+				}
 			}
-			// Only repos that have issues enabled and where the user can write.
-			if (($raw['has_issues'] ?? true) !== true || ($raw['permissions']['push'] ?? true) !== true) {
-				continue;
-			}
-			$full = (string)($raw['full_name'] ?? '');
-			if ($full !== '') {
-				$projects[] = ['id' => $full, 'name' => $full, 'types' => []];
-			}
-		}
-		return ['projects' => $projects, 'capabilities' => ['type' => false, 'typeRequired' => false]];
+			$pagesWalked++;
+			$page = $this->nextPageFromLink($response->getHeader('Link')) ?? '';
+		} while ($page !== '' && $pagesWalked < $maxPages);
+		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => false, 'typeRequired' => false]];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {

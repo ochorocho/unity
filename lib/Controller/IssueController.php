@@ -63,9 +63,10 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
-	public function createMeta(string $connection): DataResponse {
+	public function createMeta(string $connection, string $query = ''): DataResponse {
 		try {
-			return new DataResponse($this->issueService->getCreateMeta($this->userId ?? '', $connection));
+			$search = trim($query) === '' ? null : trim($query);
+			return new DataResponse($this->issueService->getCreateMeta($this->userId ?? '', $connection, $search));
 		} catch (TrackerException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}

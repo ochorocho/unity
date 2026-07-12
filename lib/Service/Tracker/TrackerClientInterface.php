@@ -74,9 +74,10 @@ interface TrackerClientInterface {
 	 * type list per target (Jira issue types, Redmine trackers). `capabilities.type`
 	 * is true when a type must be chosen.
 	 *
+	 * @param string|null $query optional case-insensitive search term to filter projects by
 	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
 	 */
-	public function getCreateMeta(Connection $connection): array;
+	public function getCreateMeta(Connection $connection, ?string $query = null): array;
 
 	/**
 	 * Create a new issue and return it (normalized, with its ref).

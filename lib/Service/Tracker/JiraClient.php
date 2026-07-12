@@ -423,7 +423,7 @@ class JiraClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null): array {
 		$projects = [];
 		try {
 			$data = $this->json(
@@ -461,7 +461,8 @@ class JiraClient extends AbstractTrackerClient {
 				}
 			}
 		}
-		return ['projects' => $projects, 'capabilities' => ['type' => true, 'typeRequired' => true]];
+		// createmeta / project lists aren't text-searchable, so narrow them here.
+		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => true, 'typeRequired' => true]];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {
