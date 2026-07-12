@@ -197,6 +197,60 @@ composer run lint              # php -l on all sources
 
 ---
 
+## Releasing to the Nextcloud App Store
+
+Publishing is automated by [`.github/workflows/release.yml`](.github/workflows/release.yml): pushing
+a `vX.Y.Z` tag (matching `appinfo/info.xml <version>`) builds a signed tarball, creates a GitHub
+release, and publishes it to [apps.nextcloud.com](https://apps.nextcloud.com). Before the first
+release, complete these **one-time** steps:
+
+1. **Get a signing certificate.** Generate a key + request and keep the key private:
+
+   ```bash
+   openssl req -nodes -newkey rsa:4096 -keyout unity.key -out unity.csr -subj "/CN=unity"
+   ```
+
+   Open a PR adding `unity.csr` to
+   [`nextcloud/app-certificate-requests`](https://github.com/nextcloud/app-certificate-requests)
+   (link this repo). Nextcloud reviews it and returns the signed `unity.crt`.
+
+2. **Register the app** once at <https://apps.nextcloud.com/developer/apps/new> using `unity.crt`
+   and the app-id signature:
+
+   ```bash
+   echo -n "unity" | openssl dgst -sha512 -sign unity.key | openssl base64
+   ```
+
+3. **Create an App Store API token** in your apps.nextcloud.com account settings.
+
+4. **Add repository secrets** (Settings → Secrets → Actions):
+   `APP_PRIVATE_KEY` (contents of `unity.key`), `APP_CERTIFICATE` (contents of `unity.crt`),
+   `APPSTORE_TOKEN`.
+
+5. **Add a screenshot** at `screenshots/main.png` (referenced by `info.xml`).
+
+Then cut a release:
+
+```bash
+# bump <version> in appinfo/info.xml first (the App Store rejects a re-used version)
+git tag v0.10.9
+git push origin v0.10.9
+```
+
+**Manual fallback** (no CI): build and publish locally —
+
+```bash
+ddev exec -d /var/www/html/app/unity make appstore OCC="php /var/www/html/nextcloud/occ" \
+    cert_dir=$HOME/.nextcloud/certificates
+# then upload build/artifacts/unity.tar.gz somewhere public and POST its URL + signature:
+SIG=$(make appstore-sign)
+curl -X POST https://apps.nextcloud.com/api/v1/apps/releases \
+  -H "Authorization: Token $APPSTORE_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"download\":\"<public-url>/unity.tar.gz\",\"signature\":\"$SIG\",\"nightly\":false}"
+```
+
+---
+
 ## License
 
 [AGPL-3.0-or-later](https://www.gnu.org/licenses/agpl-3.0.html). © Jochen Roth.

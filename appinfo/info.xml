@@ -12,10 +12,16 @@ add comments, and log time — using your own API tokens configured per user.]]>
     <namespace>Unity</namespace>
     <category>integration</category>
     <category>tools</category>
-    <bugs>https://github.com/example/unity/issues</bugs>
+    <website>https://github.com/ochorocho/unity</website>
+    <bugs>https://github.com/ochorocho/unity/issues</bugs>
+    <repository type="git">https://github.com/ochorocho/unity.git</repository>
+    <screenshot>https://raw.githubusercontent.com/ochorocho/unity/main/screenshots/main.png</screenshot>
     <dependencies>
         <nextcloud min-version="31" max-version="34"/>
     </dependencies>
+    <background-jobs>
+        <job>OCA\Unity\BackgroundJob\SyncIssuesJob</job>
+    </background-jobs>
     <settings>
         <personal>OCA\Unity\Settings\Personal</personal>
         <personal-section>OCA\Unity\Settings\PersonalSection</personal-section>
@@ -29,7 +35,4 @@ add comments, and log time — using your own API tokens configured per user.]]>
             <order>10</order>
         </navigation>
     </navigations>
-    <background-jobs>
-        <job>OCA\Unity\BackgroundJob\SyncIssuesJob</job>
-    </background-jobs>
 </info>

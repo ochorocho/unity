@@ -1,0 +1,95 @@
+name: release
+
+# Build, integrity-sign and publish the app to the Nextcloud App Store when a
+# version tag (vX.Y.Z, matching appinfo/info.xml <version>) is pushed.
+#
+# Required repository secrets:
+#   APP_PRIVATE_KEY  - contents of the Nextcloud-issued signing key (unity.key)
+#   APP_CERTIFICATE  - contents of the signed certificate (unity.crt)
+#   APPSTORE_TOKEN   - apps.nextcloud.com API token (account settings)
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+env:
+  APP_ID: unity
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    name: build, sign & publish
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Set up php
+        uses: shivammathur/setup-php@44454db4f0199b8b9685a5d763dc37cbf79108e1 # v2.36.0
+        with:
+          php-version: '8.3'
+          extensions: mbstring, intl, sqlite3, curl, xml, json, zip, gd
+          coverage: none
+
+      - name: Read package.json node and npm engines version
+        uses: skjnldsv/read-package-engines-version-actions@06d6baf7d8f41934ab630e97d9e6c0bc9c9ac5e4 # v3
+        id: versions
+        with:
+          fallbackNode: '^20'
+          fallbackNpm: '^10'
+
+      - name: Set up node ${{ steps.versions.outputs.nodeVersion }}
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: ${{ steps.versions.outputs.nodeVersion }}
+
+      - name: Set up npm ${{ steps.versions.outputs.npmVersion }}
+        run: npm i -g 'npm@${{ steps.versions.outputs.npmVersion }}'
+
+      - name: Verify the tag matches info.xml <version>
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          XMLVER="$(grep -oPm1 '(?<=<version>)[^<]+' appinfo/info.xml)"
+          echo "tag=$TAG info.xml=$XMLVER"
+          test "$TAG" = "$XMLVER" || { echo "::error::tag $TAG != info.xml version $XMLVER"; exit 1; }
+
+      - name: Write signing certificate and key
+        env:
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          APP_CERTIFICATE: ${{ secrets.APP_CERTIFICATE }}
+        run: |
+          mkdir -p ~/.nextcloud/certificates
+          printf '%s' "$APP_PRIVATE_KEY" > ~/.nextcloud/certificates/${APP_ID}.key
+          printf '%s' "$APP_CERTIFICATE" > ~/.nextcloud/certificates/${APP_ID}.crt
+          chmod 600 ~/.nextcloud/certificates/${APP_ID}.key
+
+      - name: Set up Nextcloud (provides occ for integrity signing)
+        run: |
+          git clone https://github.com/nextcloud/server.git --recursive --depth 1 -b stable33 ~/nextcloud
+          php ~/nextcloud/occ maintenance:install --database=sqlite --admin-user admin --admin-pass admin
+
+      - name: Build signed App Store tarball
+        run: make appstore OCC="php $HOME/nextcloud/occ"
+
+      - name: Create the GitHub release and attach the tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "build/artifacts/${APP_ID}.tar.gz" \
+            --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Publish to the Nextcloud App Store
+        env:
+          APPSTORE_TOKEN: ${{ secrets.APPSTORE_TOKEN }}
+        run: |
+          DOWNLOAD="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${APP_ID}.tar.gz"
+          SIGNATURE="$(openssl dgst -sha512 -sign ~/.nextcloud/certificates/${APP_ID}.key build/artifacts/${APP_ID}.tar.gz | openssl base64 -A)"
+          curl -sSf -X POST https://apps.nextcloud.com/api/v1/apps/releases \
+            -H "Authorization: Token ${APPSTORE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"download\":\"${DOWNLOAD}\",\"signature\":\"${SIGNATURE}\",\"nightly\":false}"
