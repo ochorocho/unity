@@ -527,4 +527,38 @@ class JiraClientTest extends TestCase {
 		$this->assertStringContainsString('/rest/api/3/attachment/10050', $captured['url']);
 		$this->assertStringStartsWith('Basic ', $captured['options']['headers']['Authorization']);
 	}
+
+	public function testGetCreateMetaMapsProjectsAndTypes(): void {
+		$this->httpClient->method('request')->willReturnCallback(fn ($m, $u, $o) => $this->response(200, [
+			'projects' => [[
+				'key' => 'ABC', 'name' => 'Acme',
+				'issuetypes' => [['id' => '1', 'name' => 'Bug'], ['id' => '2', 'name' => 'Sub', 'subtask' => true]],
+			]],
+		]));
+		$meta = $this->jira->getCreateMeta($this->connection);
+		$this->assertCount(1, $meta['projects']);
+		$this->assertSame('ABC', $meta['projects'][0]['id']);
+		$this->assertCount(1, $meta['projects'][0]['types'], 'subtask types filtered out');
+		$this->assertSame('Bug', $meta['projects'][0]['types'][0]['name']);
+		$this->assertTrue($meta['capabilities']['type']);
+	}
+
+	public function testCreateIssuePostsFieldsAndFetchesResult(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issue') && !str_contains($u, 'createmeta')) {
+				$captured = ['url' => $u, 'options' => $o];
+				return $this->response(201, ['key' => 'ABC-5']);
+			}
+			// getIssue() after creation.
+			return $this->response(200, ['key' => 'ABC-5', 'fields' => ['summary' => 'New', 'project' => ['name' => 'Acme']]]);
+		});
+		$issue = $this->jira->createIssue($this->connection, ['project' => 'ABC', 'type' => '1', 'title' => 'New', 'description' => 'Body']);
+		$this->assertNotNull($captured);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame('ABC', $body['fields']['project']['key']);
+		$this->assertSame('1', $body['fields']['issuetype']['id']);
+		$this->assertSame('New', $body['fields']['summary']);
+		$this->assertSame('ABC-5', $issue->displayId);
+	}
 }

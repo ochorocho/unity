@@ -214,6 +214,72 @@ class RedmineClient extends AbstractTrackerClient {
 		return $this->getIssue($connection, $refParts);
 	}
 
+	public function supportsCreate(): bool {
+		return true;
+	}
+
+	public function getCreateMeta(Connection $connection): array {
+		// Redmine trackers are global (shared by all projects).
+		$types = [];
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/trackers.json', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Trackers',
+			);
+			foreach ($data['trackers'] ?? [] as $tr) {
+				if (is_array($tr)) {
+					$types[] = ['id' => (string)($tr['id'] ?? ''), 'name' => (string)($tr['name'] ?? '')];
+				}
+			}
+		} catch (TrackerException $e) {
+		}
+		$projects = [];
+		$offset = 0;
+		do {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/projects.json', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['limit' => '100', 'offset' => (string)$offset],
+				], $connection),
+				'Projects',
+			);
+			foreach ($data['projects'] ?? [] as $p) {
+				if (is_array($p)) {
+					$projects[] = ['id' => (string)($p['id'] ?? ''), 'name' => (string)($p['name'] ?? ''), 'types' => $types];
+				}
+			}
+			$total = (int)($data['total_count'] ?? 0);
+			$offset += 100;
+		} while ($offset < $total && $offset < 500);
+		return ['projects' => $projects, 'capabilities' => ['type' => $types !== [], 'typeRequired' => $types !== []]];
+	}
+
+	public function createIssue(Connection $connection, array $target): Issue {
+		$projectId = (int)$target['project'];
+		if ($projectId <= 0) {
+			throw new TrackerException('A project is required');
+		}
+		$issue = [
+			'project_id' => $projectId,
+			'subject' => (string)$target['title'],
+			'description' => (string)($target['description'] ?? ''),
+		];
+		$trackerId = (int)($target['type'] ?? 0);
+		if ($trackerId > 0) {
+			$issue['tracker_id'] = $trackerId;
+		}
+		$data = $this->json(
+			$this->request('POST', $this->base($connection) . '/issues.json', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode(['issue' => $issue]),
+			], $connection),
+			'Create issue',
+		);
+		return $this->normalizeIssue($connection, is_array($data['issue'] ?? null) ? $data['issue'] : []);
+	}
+
 	public function getEditMeta(Connection $connection, array $refParts): array {
 		$statuses = [];
 		try {

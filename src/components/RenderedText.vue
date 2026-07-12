@@ -1,5 +1,7 @@
 <template>
-	<div v-if="format === 'markdown'" ref="mdRoot" class="unity-rendered">
+	<!-- eslint-disable-next-line vue/no-v-html -->
+	<div v-if="rendered" ref="htmlRoot" class="unity-rendered unity-html" v-html="renderedSafe" @click="onRenderedTodo" />
+	<div v-else-if="format === 'markdown'" ref="mdRoot" class="unity-rendered">
 		<NcRichText :text="markdownText"
 			:use-markdown="true"
 			:use-extended-markdown="true"
@@ -28,9 +30,16 @@ export default {
 		format: { type: String, default: 'plaintext' },
 		issueRef: { type: String, default: '' },
 		editable: { type: Boolean, default: false },
+		// Provider-rendered HTML (e.g. GitLab's own Markdown renderer). When set it
+		// takes precedence over `format`, is sanitized/image-proxied, and shown as
+		// HTML; `text` remains the raw source (used by editing/task-toggle).
+		rendered: { type: String, default: '' },
 	},
 	emits: ['update:text'],
 	computed: {
+		renderedSafe() {
+			return this.rendered ? renderHtml(this.rendered, this.issueRef) : ''
+		},
 		markdownText() {
 			return proxifyImages(emojify(this.text), this.issueRef)
 		},
@@ -44,6 +53,12 @@ export default {
 			return emojify(this.text)
 		},
 	},
+	watch: {
+		// Re-enable task checkboxes after a silent re-fetch re-renders the body.
+		renderedSafe() {
+			this.$nextTick(() => this.enableRenderedTasks())
+		},
+	},
 	mounted() {
 		if (this.format === 'markdown' && this.$refs.mdRoot) {
 			// NcRichText renders (and re-renders on text change) asynchronously, so
@@ -51,6 +66,9 @@ export default {
 			this.imageObserver = new MutationObserver(() => this.applyImageDimensions())
 			this.imageObserver.observe(this.$refs.mdRoot, { childList: true, subtree: true })
 			this.$nextTick(() => this.applyImageDimensions())
+		}
+		if (this.rendered) {
+			this.$nextTick(() => this.enableRenderedTasks())
 		}
 	},
 	beforeUnmount() {
@@ -93,6 +111,35 @@ export default {
 					img.setAttribute('height', d.height)
 				}
 			})
+		},
+		// Server-rendered bodies (e.g. GitLab) come back with static, disabled task
+		// checkboxes. When the body is editable, re-enable them so they can be ticked.
+		enableRenderedTasks() {
+			if (!this.rendered || !this.editable || !this.$refs.htmlRoot) {
+				return
+			}
+			this.$refs.htmlRoot.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+				cb.disabled = false
+				cb.style.cursor = 'pointer'
+			})
+		},
+		// Toggle the clicked task in the server-rendered HTML by flipping the matching
+		// marker in the raw Markdown (kept in `text`) — same emit contract as the
+		// NcRichText path; the parent persists it and a silent re-fetch re-renders.
+		onRenderedTodo(e) {
+			if (!this.editable || !this.$refs.htmlRoot) {
+				return
+			}
+			const target = e.target
+			if (!target || target.tagName !== 'INPUT' || target.getAttribute('type') !== 'checkbox') {
+				return
+			}
+			const boxes = [...this.$refs.htmlRoot.querySelectorAll('input[type="checkbox"]')]
+			const index = boxes.indexOf(target)
+			if (index === -1) {
+				return
+			}
+			this.$emit('update:text', toggleTaskAt(this.text, index))
 		},
 		onInteractTodo(id) {
 			if (!this.editable || !this.$refs.mdRoot) {
@@ -140,5 +187,11 @@ export default {
 }
 .unity-rendered :deep(.task-list-item) {
 	list-style: none;
+}
+/* Vertically center the checkbox against its label in server-rendered task lists
+   (e.g. GitLab), which otherwise sit the box on the text baseline. */
+.unity-html :deep(.task-list-item) input[type="checkbox"] {
+	vertical-align: middle;
+	margin: 0 0.4em 0 0;
 }
 </style>

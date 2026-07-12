@@ -16,6 +16,10 @@ return [
 		['name' => 'connection#update', 'url' => '/connections/{id}', 'verb' => 'PUT'],
 		['name' => 'connection#destroy', 'url' => '/connections/{id}', 'verb' => 'DELETE'],
 
+		// Issue creation
+		['name' => 'issue#createMeta', 'url' => '/create-meta', 'verb' => 'GET'],
+		['name' => 'issue#create', 'url' => '/create', 'verb' => 'POST'],
+
 		// Issues
 		['name' => 'issue#search', 'url' => '/issues', 'verb' => 'GET'],
 		['name' => 'issue#show', 'url' => '/issues/{ref}', 'verb' => 'GET'],

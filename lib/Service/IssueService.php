@@ -95,6 +95,40 @@ class IssueService {
 	}
 
 	/**
+	 * Projects/types the user can create an issue in for a connection.
+	 *
+	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
+	 * @throws TrackerException
+	 */
+	public function getCreateMeta(string $userId, string $connectionId): array {
+		[$client, $connection] = $this->resolveConnection($userId, $connectionId);
+		if (!$client->supportsCreate()) {
+			throw new TrackerException('Creating issues is not supported for this tracker');
+		}
+		return $client->getCreateMeta($connection);
+	}
+
+	/**
+	 * Create a new issue on a connection and return it.
+	 *
+	 * @param array{project: string, type?: string, title: string, description?: string} $target
+	 * @throws TrackerException
+	 */
+	public function createIssue(string $userId, string $connectionId, array $target): Issue {
+		[$client, $connection] = $this->resolveConnection($userId, $connectionId);
+		if (!$client->supportsCreate()) {
+			throw new TrackerException('Creating issues is not supported for this tracker');
+		}
+		if (trim((string)$target['title']) === '') {
+			throw new TrackerException('A title is required');
+		}
+		$issue = $client->createIssue($connection, $target);
+		// Invalidate cached lists so the new issue shows up immediately.
+		$this->bumpGeneration($userId);
+		return $issue;
+	}
+
+	/**
 	 * @return Comment[]
 	 */
 	public function getComments(string $userId, string $ref): array {
@@ -322,6 +356,31 @@ class IssueService {
 		}
 		$next = $data['nextCursor'] ?? null;
 		return new TrackerSearchResult($issues, is_string($next) ? $next : null);
+	}
+
+	/**
+	 * Resolve a connection id to its client + credentialed connection.
+	 *
+	 * @return array{0: TrackerClientInterface, 1: Connection}
+	 * @throws TrackerException
+	 */
+	private function resolveConnection(string $userId, string $connectionId): array {
+		$connection = $this->connections->getWithSecrets($userId, $connectionId);
+		if ($connection === null) {
+			throw new TrackerException('Connection not found');
+		}
+		$client = $this->trackers->get($connection->tracker);
+		if ($client === null) {
+			throw new TrackerException('Unknown tracker: ' . $connection->tracker);
+		}
+		return [$client, $connection];
+	}
+
+	/** Bump the user's cache generation, invalidating all cached search results. */
+	private function bumpGeneration(string $userId): void {
+		$key = self::generationKey($userId);
+		$current = (int)($this->cache->get($key) ?? 0);
+		$this->cache->set($key, $current + 1);
 	}
 
 	/**

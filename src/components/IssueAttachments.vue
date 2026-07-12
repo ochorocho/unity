@@ -154,22 +154,44 @@ export default {
 			this.$refs.fileInput.click()
 		},
 		async onFile(e) {
-			const file = e.target.files && e.target.files[0]
+			const files = e.target.files ? Array.from(e.target.files) : []
 			e.target.value = '' // allow re-selecting the same file later
-			if (!file) {
+			await this.uploadFiles(files)
+		},
+		/**
+		 * Upload one or more files to the issue, one request each. Shared by the
+		 * "Add attachment" picker and the parent's drag-and-drop drop zone (called
+		 * via a $ref). Refreshes the list and emits `changed` when any succeed.
+		 *
+		 * @param {File[]|FileList} files files to upload
+		 */
+		async uploadFiles(files) {
+			const list = Array.from(files || []).filter(Boolean)
+			if (list.length === 0) {
 				return
 			}
 			this.uploading = true
+			let ok = 0
 			try {
 				const ref = encodeURIComponent(this.issueRef)
-				const fd = new FormData()
-				fd.append('file', file)
-				await axios.post(generateUrl('/apps/unity/issues/{ref}/attachments', { ref }), fd)
-				showSuccess(this.t('unity', 'Attachment uploaded'))
-				await this.fetch()
-				this.$emit('changed')
-			} catch (err) {
-				showError(err?.response?.data?.error || this.t('unity', 'Could not upload the attachment'))
+				for (const file of list) {
+					try {
+						const fd = new FormData()
+						fd.append('file', file)
+						await axios.post(generateUrl('/apps/unity/issues/{ref}/attachments', { ref }), fd)
+						ok++
+					} catch (err) {
+						showError(err?.response?.data?.error
+							|| this.t('unity', 'Could not upload {name}', { name: file.name }))
+					}
+				}
+				if (ok > 0) {
+					showSuccess(ok === 1
+						? this.t('unity', 'Attachment uploaded')
+						: this.t('unity', '{count} attachments uploaded', { count: ok }))
+					await this.fetch()
+					this.$emit('changed')
+				}
 			} finally {
 				this.uploading = false
 			}

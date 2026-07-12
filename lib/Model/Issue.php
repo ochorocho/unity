@@ -34,6 +34,13 @@ class Issue implements JsonSerializable {
 		public string $url,
 		public ?int $timeSpentSeconds = null,
 		public string $bodyFormat = 'plaintext',
+		/**
+		 * Provider-rendered HTML for the description (e.g. GitLab renders its
+		 * Markdown — including embedded raw HTML — server-side). When present the
+		 * UI shows this sanitized HTML; `description` still holds the raw source
+		 * used for editing. Only populated for the single-issue view.
+		 */
+		public ?string $renderedDescription = null,
 	) {
 	}
 
@@ -66,6 +73,7 @@ class Issue implements JsonSerializable {
 			(string)($a['url'] ?? ''),
 			isset($a['timeSpentSeconds']) ? (int)$a['timeSpentSeconds'] : null,
 			(string)($a['bodyFormat'] ?? 'plaintext'),
+			isset($a['renderedDescription']) ? (string)$a['renderedDescription'] : null,
 		);
 	}
 }

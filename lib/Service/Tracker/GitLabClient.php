@@ -99,7 +99,12 @@ class GitLabClient extends AbstractTrackerClient {
 			], $connection),
 			'Get issue',
 		);
-		return $this->normalizeIssue($connection, $data);
+		$issue = $this->normalizeIssue($connection, $data);
+		// Render the Markdown (incl. embedded raw HTML like <details>) via GitLab's
+		// own renderer so the UI matches GitLab exactly; the raw description is kept
+		// for editing. Only done for the single-issue view, never the list.
+		$issue->renderedDescription = $this->renderMarkdown($connection, $issue->description, (string)($refParts['path'] ?? ''));
+		return $issue;
 	}
 
 	public function getComments(Connection $connection, array $refParts): array {
@@ -110,18 +115,22 @@ class GitLabClient extends AbstractTrackerClient {
 			], $connection),
 			'Get comments',
 		);
+		$path = (string)($refParts['path'] ?? '');
 		$comments = [];
 		foreach ($data as $raw) {
 			if (!is_array($raw) || ($raw['system'] ?? false) === true) {
 				continue;
 			}
-			$comments[] = new Comment(
+			$body = (string)($raw['body'] ?? '');
+			$comment = new Comment(
 				(string)($raw['id'] ?? ''),
 				(string)($raw['author']['name'] ?? $raw['author']['username'] ?? ''),
 				$raw['author']['avatar_url'] ?? null,
-				(string)($raw['body'] ?? ''),
+				$body,
 				$raw['created_at'] ?? null,
 			);
+			$comment->renderedBody = $this->renderMarkdown($connection, $body, $path);
+			$comments[] = $comment;
 		}
 		return $comments;
 	}
@@ -134,13 +143,16 @@ class GitLabClient extends AbstractTrackerClient {
 			], $connection),
 			'Add comment',
 		);
-		return new Comment(
+		$newBody = (string)($raw['body'] ?? $body);
+		$comment = new Comment(
 			(string)($raw['id'] ?? ''),
 			(string)($raw['author']['name'] ?? ''),
 			$raw['author']['avatar_url'] ?? null,
-			(string)($raw['body'] ?? $body),
+			$newBody,
 			$raw['created_at'] ?? null,
 		);
+		$comment->renderedBody = $this->renderMarkdown($connection, $newBody, (string)($refParts['path'] ?? ''));
+		return $comment;
 	}
 
 	public function logTime(Connection $connection, array $refParts, int $seconds, string $comment, ?string $startedAt): void {
@@ -161,13 +173,16 @@ class GitLabClient extends AbstractTrackerClient {
 			], $connection),
 			'Update comment',
 		);
-		return new Comment(
+		$newBody = (string)($raw['body'] ?? $body);
+		$comment = new Comment(
 			(string)($raw['id'] ?? $commentId),
 			(string)($raw['author']['name'] ?? ''),
 			$raw['author']['avatar_url'] ?? null,
-			(string)($raw['body'] ?? $body),
+			$newBody,
 			$raw['created_at'] ?? null,
 		);
+		$comment->renderedBody = $this->renderMarkdown($connection, $newBody, (string)($refParts['path'] ?? ''));
+		return $comment;
 	}
 
 	public function updateIssue(Connection $connection, array $refParts, array $changes): Issue {
@@ -199,6 +214,56 @@ class GitLabClient extends AbstractTrackerClient {
 				'body' => json_encode($body),
 			], $connection),
 			'Update issue',
+		);
+		return $this->normalizeIssue($connection, $data);
+	}
+
+	public function supportsCreate(): bool {
+		return true;
+	}
+
+	public function getCreateMeta(Connection $connection): array {
+		$data = $this->json(
+			$this->request('GET', $this->apiRoot($connection) . '/projects', [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => [
+					'membership' => 'true',
+					'simple' => 'true',
+					// 30 = Developer, the minimum access level that can create issues.
+					'min_access_level' => '30',
+					'per_page' => '100',
+					'order_by' => 'last_activity_at',
+				],
+			], $connection),
+			'Projects',
+		);
+		$projects = [];
+		foreach ($data as $raw) {
+			if (is_array($raw)) {
+				$projects[] = [
+					'id' => (string)($raw['id'] ?? ''),
+					'name' => (string)($raw['name_with_namespace'] ?? $raw['path_with_namespace'] ?? $raw['name'] ?? ''),
+					'types' => [],
+				];
+			}
+		}
+		return ['projects' => $projects, 'capabilities' => ['type' => false, 'typeRequired' => false]];
+	}
+
+	public function createIssue(Connection $connection, array $target): Issue {
+		$projectId = (string)$target['project'];
+		if ($projectId === '') {
+			throw new TrackerException('A project is required');
+		}
+		$data = $this->json(
+			$this->request('POST', $this->apiRoot($connection) . '/projects/' . rawurlencode($projectId) . '/issues', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode([
+					'title' => (string)$target['title'],
+					'description' => (string)($target['description'] ?? ''),
+				]),
+			], $connection),
+			'Create issue',
 		);
 		return $this->normalizeIssue($connection, $data);
 	}
@@ -379,6 +444,38 @@ class GitLabClient extends AbstractTrackerClient {
 			);
 		}
 		return $records;
+	}
+
+	/**
+	 * Render GitLab-Flavored Markdown to HTML via GitLab's own `/api/v4/markdown`
+	 * endpoint, so descriptions/comments (including embedded raw HTML such as
+	 * <details>/<summary>) display exactly as GitLab renders them. The `project`
+	 * context lets GitLab resolve references and relative upload paths.
+	 *
+	 * Returns null on empty input or any failure, so the UI falls back to the raw
+	 * Markdown rather than showing a blank body.
+	 */
+	private function renderMarkdown(Connection $connection, string $text, string $projectPath): ?string {
+		if (trim($text) === '') {
+			return null;
+		}
+		try {
+			$payload = ['text' => $text, 'gfm' => true];
+			if ($projectPath !== '') {
+				$payload['project'] = $projectPath;
+			}
+			$data = $this->json(
+				$this->request('POST', $this->apiRoot($connection) . '/markdown', [
+					'headers' => $this->defaultHeaders($connection),
+					'body' => json_encode($payload),
+				], $connection),
+				'Render markdown',
+			);
+			$html = $data['html'] ?? null;
+			return is_string($html) && $html !== '' ? $html : null;
+		} catch (TrackerException $e) {
+			return null;
+		}
 	}
 
 	/** The connection user's own GitLab username, or '' if it can't be resolved. */

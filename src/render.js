@@ -41,7 +41,12 @@ export function sanitizeHtml(html, ref) {
 	}
 
 	DOMPurify.addHook('afterSanitizeAttributes', hook)
-	const clean = DOMPurify.sanitize(html || '', { ADD_ATTR: ['target', 'rel'] })
+	// Keep task-list checkboxes (e.g. GitLab's server-rendered Markdown) so they can
+	// be re-enabled and toggled; DOMPurify strips event handlers regardless.
+	const clean = DOMPurify.sanitize(html || '', {
+		ADD_TAGS: ['input'],
+		ADD_ATTR: ['target', 'rel', 'type', 'checked', 'disabled'],
+	})
 	DOMPurify.removeHook('afterSanitizeAttributes')
 	return clean
 }

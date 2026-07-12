@@ -1,5 +1,14 @@
 <template>
-	<div class="unity-detail">
+	<div class="unity-detail"
+		@dragover="onDragOver"
+		@dragleave="onDragLeave"
+		@drop="onDrop">
+		<div v-if="dragOver" class="unity-dropzone">
+			<div class="unity-dropzone-inner">
+				<Paperclip :size="32" />
+				<span>{{ t('unity', 'Drop files to attach') }}</span>
+			</div>
+		</div>
 		<div class="unity-detail-header">
 			<div class="unity-detail-title">
 				<span class="unity-badge" :style="{ backgroundColor: color }">{{ shortLabel }}</span>
@@ -29,12 +38,14 @@
 		<div v-if="issue.description" class="unity-description">
 			<RenderedText :text="issue.description"
 				:format="issue.bodyFormat"
+				:rendered="issue.renderedDescription"
 				:issue-ref="issue.ref"
 				:editable="true"
 				@update:text="onDescriptionTask" />
 		</div>
 
 		<IssueAttachments v-if="supportsAttachments"
+			ref="attachments"
 			:issue-ref="issue.ref"
 			:reload-key="attachmentsReloadKey"
 			@changed="attachmentsReloadKey++" />
@@ -86,6 +97,7 @@ import { showError } from '@nextcloud/dialogs'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
+import Paperclip from 'vue-material-design-icons/Paperclip.vue'
 import CommentList from './CommentList.vue'
 import AddComment from './AddComment.vue'
 import LogTime from './LogTime.vue'
@@ -98,7 +110,7 @@ import { humanizeDuration } from '../duration.js'
 
 export default {
 	name: 'IssueDetail',
-	components: { NcButton, NcLoadingIcon, NcDialog, CommentList, AddComment, LogTime, RenderedText, TimeRecords, IssueAttachments, IssueEdit },
+	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, CommentList, AddComment, LogTime, RenderedText, TimeRecords, IssueAttachments, IssueEdit },
 	props: {
 		issue: { type: Object, required: true },
 		comments: { type: Array, default: () => [] },
@@ -112,6 +124,7 @@ export default {
 			attachmentsReloadKey: 0,
 			editing: false,
 			editRecord: null,
+			dragOver: false,
 		}
 	},
 	watch: {
@@ -121,6 +134,7 @@ export default {
 			this.editing = false
 			this.showLogModal = false
 			this.editRecord = null
+			this.dragOver = false
 		},
 	},
 	computed: {
@@ -181,6 +195,40 @@ export default {
 			this.editing = false
 			this.$emit('updated')
 		},
+		/** True while a file (not text/other) is being dragged over the detail. */
+		isFileDrag(e) {
+			const types = e.dataTransfer && e.dataTransfer.types
+			return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1
+		},
+		onDragOver(e) {
+			if (!this.supportsAttachments || !this.isFileDrag(e)) {
+				return
+			}
+			// preventDefault marks this as a valid drop target.
+			e.preventDefault()
+			this.dragOver = true
+		},
+		onDragLeave(e) {
+			// Ignore leaves into child elements; only clear when the pointer leaves
+			// the detail container entirely (relatedTarget outside it, or null).
+			if (!this.dragOver) {
+				return
+			}
+			if (!e.relatedTarget || !this.$el.contains(e.relatedTarget)) {
+				this.dragOver = false
+			}
+		},
+		onDrop(e) {
+			if (!this.supportsAttachments || !this.isFileDrag(e)) {
+				return
+			}
+			e.preventDefault()
+			this.dragOver = false
+			const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : []
+			if (files.length && this.$refs.attachments) {
+				this.$refs.attachments.uploadFiles(files)
+			}
+		},
 		async onDescriptionTask(newText) {
 			try {
 				const ref = encodeURIComponent(this.issue.ref)
@@ -195,6 +243,31 @@ export default {
 </script>
 
 <style scoped>
+.unity-detail {
+	position: relative;
+}
+.unity-dropzone {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	/* Purely visual — let the drop event fall through to the container handler. */
+	pointer-events: none;
+	background: var(--color-primary-element-light);
+	border: 2px dashed var(--color-primary-element);
+	border-radius: var(--border-radius-large, 12px);
+	opacity: 0.95;
+}
+.unity-dropzone-inner {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	color: var(--color-primary-element);
+	font-weight: bold;
+}
 .unity-detail-header {
 	display: flex;
 	justify-content: space-between;
