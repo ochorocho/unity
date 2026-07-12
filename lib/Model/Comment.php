@@ -20,6 +20,12 @@ class Comment implements JsonSerializable {
 		public string $body,
 		public ?string $createdAt,
 		public ?string $url = null,
+		/**
+		 * Provider-rendered HTML for the body (e.g. GitLab renders its Markdown —
+		 * including embedded raw HTML — server-side). When present the UI shows
+		 * this sanitized HTML; `body` still holds the raw source.
+		 */
+		public ?string $renderedBody = null,
 	) {
 	}
 

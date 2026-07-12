@@ -63,6 +63,36 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	public function createMeta(string $connection): DataResponse {
+		try {
+			return new DataResponse($this->issueService->getCreateMeta($this->userId ?? '', $connection));
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function create(string $connection, string $project, string $title, string $description = '', string $type = ''): DataResponse {
+		if (trim($title) === '') {
+			return new DataResponse(['error' => 'A title is required'], Http::STATUS_BAD_REQUEST);
+		}
+		if (trim($project) === '') {
+			return new DataResponse(['error' => 'A project is required'], Http::STATUS_BAD_REQUEST);
+		}
+		try {
+			$issue = $this->issueService->createIssue($this->userId ?? '', $connection, [
+				'project' => $project,
+				'type' => $type,
+				'title' => $title,
+				'description' => $description,
+			]);
+			return new DataResponse($issue, Http::STATUS_CREATED);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
 	public function show(string $ref): DataResponse {
 		try {
 			return new DataResponse($this->issueService->getIssue($this->userId ?? '', $ref));

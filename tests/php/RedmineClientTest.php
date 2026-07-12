@@ -287,4 +287,34 @@ class RedmineClientTest extends TestCase {
 		$this->assertStringContainsString('/attachments/9.json', $captured['url']);
 		$this->assertSame('key', $captured['options']['headers']['X-Redmine-API-Key']);
 	}
+
+	public function testGetCreateMetaAttachesGlobalTrackers(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/trackers.json')) {
+				return $this->response(200, ['trackers' => [['id' => 1, 'name' => 'Bug'], ['id' => 2, 'name' => 'Feature']]]);
+			}
+			return $this->response(200, ['projects' => [['id' => 3, 'name' => 'Website']], 'total_count' => 1]);
+		});
+		$meta = $this->client->getCreateMeta($this->connection);
+		$this->assertCount(1, $meta['projects']);
+		$this->assertSame('3', $meta['projects'][0]['id']);
+		$this->assertCount(2, $meta['projects'][0]['types'], 'global trackers attached to the project');
+		$this->assertTrue($meta['capabilities']['type']);
+	}
+
+	public function testCreateIssuePostsSubjectAndTracker(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(200, ['issue' => ['id' => 88, 'subject' => 'New', 'project' => ['name' => 'Website']]]);
+		});
+		$issue = $this->client->createIssue($this->connection, ['project' => '3', 'type' => '2', 'title' => 'New', 'description' => 'Body']);
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/issues.json', $captured['url']);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame(3, $body['issue']['project_id']);
+		$this->assertSame('New', $body['issue']['subject']);
+		$this->assertSame(2, $body['issue']['tracker_id']);
+		$this->assertSame('#88', $issue->displayId);
+	}
 }

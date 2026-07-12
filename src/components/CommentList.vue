@@ -11,6 +11,7 @@
 			<RenderedText class="unity-comment-body"
 				:text="comment.body"
 				:format="format"
+				:rendered="comment.renderedBody"
 				:issue-ref="issueRef"
 				:editable="editable && !!comment.id"
 				@update:text="(newText) => onCommentTask(comment, newText)" />

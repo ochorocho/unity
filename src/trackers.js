@@ -5,15 +5,20 @@ import { translate as t } from '@nextcloud/l10n'
 
 /** Tracker metadata shared across the UI. */
 export const TRACKERS = [
-	{ id: 'jira', label: 'Jira', color: '#2684ff', timeTracking: true, attachments: true, emojiShortcodes: false },
-	{ id: 'gitlab', label: 'GitLab', color: '#fc6d26', timeTracking: true, attachments: false, emojiShortcodes: true },
-	{ id: 'redmine', label: 'Redmine', color: '#b32024', timeTracking: true, attachments: true, emojiShortcodes: false },
-	{ id: 'github', label: 'GitHub', color: '#24292f', timeTracking: false, attachments: false, emojiShortcodes: true },
+	{ id: 'jira', label: 'Jira', color: '#2684ff', timeTracking: true, attachments: true, emojiShortcodes: false, create: true },
+	{ id: 'gitlab', label: 'GitLab', color: '#fc6d26', timeTracking: true, attachments: false, emojiShortcodes: true, create: true },
+	{ id: 'redmine', label: 'Redmine', color: '#b32024', timeTracking: true, attachments: true, emojiShortcodes: false, create: true },
+	{ id: 'github', label: 'GitHub', color: '#24292f', timeTracking: false, attachments: false, emojiShortcodes: true, create: true },
 ]
 
 export function trackerById(id) {
 	return TRACKERS.find((tr) => tr.id === id)
-		|| { id, label: id, color: 'var(--color-primary-element)', timeTracking: false, attachments: false, emojiShortcodes: false }
+		|| { id, label: id, color: 'var(--color-primary-element)', timeTracking: false, attachments: false, emojiShortcodes: false, create: false }
+}
+
+/** Body format used for a new issue's description input, by tracker. */
+export function createBodyFormat(trackerId) {
+	return trackerId === 'redmine' ? 'textile' : 'markdown'
 }
 
 export const SORT_OPTIONS = () => [

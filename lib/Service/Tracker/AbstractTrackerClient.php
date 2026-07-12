@@ -41,6 +41,29 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		return false;
 	}
 
+	/** Default: creating issues is unsupported. Concrete clients override this. */
+	public function supportsCreate(): bool {
+		return false;
+	}
+
+	/**
+	 * Default: no create metadata. Overridden by trackers that support creation.
+	 *
+	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
+	 */
+	public function getCreateMeta(Connection $connection): array {
+		throw new TrackerException('Creating issues is not supported for this tracker');
+	}
+
+	/**
+	 * Default: creating issues is unsupported. Trackers with a create API override.
+	 *
+	 * @param array{project: string, type?: string, title: string, description?: string} $target
+	 */
+	public function createIssue(Connection $connection, array $target): \OCA\Unity\Model\Issue {
+		throw new TrackerException('Creating issues is not supported for this tracker');
+	}
+
 	/**
 	 * Default: no attachment list. Overridden by trackers with an attachment API.
 	 *

@@ -63,6 +63,12 @@
 
 					<div class="unity-split">
 						<div class="unity-list-pane">
+							<div v-if="canCreateAny" class="unity-list-toolbar">
+								<NcButton type="primary" @click="showCreate = true">
+									<template #icon><Plus :size="20" /></template>
+									{{ t('unity', 'New issue') }}
+								</NcButton>
+							</div>
 							<NcEmptyContent v-if="!loading && issues.length === 0"
 								:name="t('unity', 'No issues found')" />
 							<IssueList v-else
@@ -96,6 +102,12 @@
 				</template>
 			</div>
 		</NcAppContent>
+
+		<IssueCreate v-if="showCreate"
+			:connections="connections"
+			:preselected="activeConnection"
+			@close="showCreate = false"
+			@created="onIssueCreated" />
 	</NcContent>
 </template>
 
@@ -113,8 +125,10 @@ import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwit
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
+import Plus from 'vue-material-design-icons/Plus.vue'
 import IssueList from './components/IssueList.vue'
 import IssueDetail from './components/IssueDetail.vue'
+import IssueCreate from './components/IssueCreate.vue'
 import { SORT_OPTIONS, trackerById } from './trackers.js'
 
 export default {
@@ -130,8 +144,10 @@ export default {
 		NcEmptyContent,
 		NcNoteCard,
 		NcLoadingIcon,
+		Plus,
 		IssueList,
 		IssueDetail,
+		IssueCreate,
 	},
 	data() {
 		let assignedToMe = true
@@ -163,6 +179,7 @@ export default {
 			comments: [],
 			loadingRef: null,
 			searchTimer: null,
+			showCreate: false,
 		}
 	},
 	computed: {
@@ -171,6 +188,10 @@ export default {
 		},
 		hasMore() {
 			return Object.keys(this.nextCursors).length > 0
+		},
+		/** True when at least one connected tracker can create issues. */
+		canCreateAny() {
+			return this.connections.some((c) => trackerById(c.tracker).create)
 		},
 		/** Ref to highlight in the list — the one being loaded, else the open one. */
 		activeRef() {
@@ -410,6 +431,15 @@ export default {
 				this.loadSelected(this.selected.ref, true)
 			}
 		},
+		onIssueCreated(issue) {
+			this.showCreate = false
+			if (issue && issue.ref) {
+				// Refresh the list (the new issue is now uncached) and open it.
+				this.reload()
+				this.setHashRef(issue.ref)
+				this.loadSelected(issue.ref)
+			}
+		},
 		openSettings() {
 			window.location.href = generateUrl('/settings/user/unity')
 		},
@@ -495,6 +525,11 @@ export default {
 	justify-content: center;
 	width: 100%;
 	height: 100%;
+}
+.unity-list-toolbar {
+	display: flex;
+	justify-content: flex-end;
+	padding: 0 0 8px;
 }
 .unity-list-footer {
 	display: flex;

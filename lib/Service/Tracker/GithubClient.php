@@ -204,6 +204,58 @@ class GithubClient extends AbstractTrackerClient {
 		return $this->normalizeIssue($connection, $data);
 	}
 
+	public function supportsCreate(): bool {
+		return true;
+	}
+
+	public function getCreateMeta(Connection $connection): array {
+		$data = $this->json(
+			$this->request('GET', $this->apiRoot($connection) . '/user/repos', [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => [
+					'per_page' => '100',
+					'sort' => 'updated',
+					'affiliation' => 'owner,collaborator,organization_member',
+				],
+			], $connection),
+			'Repositories',
+		);
+		$projects = [];
+		foreach ($data as $raw) {
+			if (!is_array($raw)) {
+				continue;
+			}
+			// Only repos that have issues enabled and where the user can write.
+			if (($raw['has_issues'] ?? true) !== true || ($raw['permissions']['push'] ?? true) !== true) {
+				continue;
+			}
+			$full = (string)($raw['full_name'] ?? '');
+			if ($full !== '') {
+				$projects[] = ['id' => $full, 'name' => $full, 'types' => []];
+			}
+		}
+		return ['projects' => $projects, 'capabilities' => ['type' => false, 'typeRequired' => false]];
+	}
+
+	public function createIssue(Connection $connection, array $target): Issue {
+		$full = (string)$target['project'];
+		if (!str_contains($full, '/')) {
+			throw new TrackerException('A repository is required');
+		}
+		[$owner, $repo] = explode('/', $full, 2);
+		$data = $this->json(
+			$this->request('POST', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/issues', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode([
+					'title' => (string)$target['title'],
+					'body' => (string)($target['description'] ?? ''),
+				]),
+			], $connection),
+			'Create issue',
+		);
+		return $this->normalizeIssue($connection, $data);
+	}
+
 	public function getEditMeta(Connection $connection, array $refParts): array {
 		$owner = rawurlencode((string)($refParts['owner'] ?? ''));
 		$repo = rawurlencode((string)($refParts['repo'] ?? ''));

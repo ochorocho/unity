@@ -134,14 +134,18 @@ class GitLabClientTest extends TestCase {
 	public function testAddCommentPostsBody(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/markdown')) {
+				return $this->response(200, ['html' => '<p>Hi</p>']);
+			}
 			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
 			return $this->response(201, ['id' => 5, 'author' => ['name' => 'Alice'], 'body' => 'Hi', 'created_at' => '2026-03-01T00:00:00Z']);
 		});
-		$comment = $this->client->addComment($this->connection, ['project' => '42', 'iid' => '7'], 'Hi');
+		$comment = $this->client->addComment($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app'], 'Hi');
 		$this->assertSame('POST', $captured['method']);
 		$this->assertStringContainsString('/projects/42/issues/7/notes', $captured['url']);
 		$this->assertSame('Hi', json_decode($captured['options']['body'], true)['body']);
 		$this->assertSame('Alice', $comment->author);
+		$this->assertSame('<p>Hi</p>', $comment->renderedBody);
 	}
 
 	public function testFetchFileResolvesRelativeUploadViaApi(): void {
@@ -166,13 +170,69 @@ class GitLabClientTest extends TestCase {
 	public function testUpdateCommentPutsNote(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/markdown')) {
+				return $this->response(200, ['html' => '<p>x</p>']);
+			}
 			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
 			return $this->response(200, ['id' => 5, 'author' => ['name' => 'Alice'], 'body' => 'x']);
 		});
-		$this->client->updateComment($this->connection, ['project' => '42', 'iid' => '7'], '5', 'x');
+		$this->client->updateComment($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app'], '5', 'x');
 		$this->assertSame('PUT', $captured['method']);
 		$this->assertStringContainsString('/projects/42/issues/7/notes/5', $captured['url']);
 		$this->assertSame('x', json_decode($captured['options']['body'], true)['body']);
+	}
+
+	public function testGetIssueRendersDescriptionHtml(): void {
+		$markdownReq = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$markdownReq) {
+			if (str_contains($u, '/markdown')) {
+				$markdownReq = ['method' => $m, 'url' => $u, 'options' => $o];
+				return $this->response(200, ['html' => '<details><summary>More</summary>hidden</details>']);
+			}
+			return $this->response(200, [
+				'id' => 100, 'iid' => 7, 'project_id' => 42, 'title' => 'X',
+				'description' => '<details><summary>More</summary>hidden</details>',
+				'references' => ['full' => 'group/app#7'], 'web_url' => 'u',
+			]);
+		});
+		$issue = $this->client->getIssue($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app']);
+		// Raw Markdown kept for editing; rendered HTML supplied for display.
+		$this->assertStringContainsString('<details>', $issue->description);
+		$this->assertSame('<details><summary>More</summary>hidden</details>', $issue->renderedDescription);
+		$this->assertSame('POST', $markdownReq['method']);
+		$this->assertStringContainsString('/api/v4/markdown', $markdownReq['url']);
+		$payload = json_decode($markdownReq['options']['body'], true);
+		$this->assertTrue($payload['gfm']);
+		$this->assertSame('group/app', $payload['project']);
+	}
+
+	public function testGetIssueSkipsMarkdownForEmptyDescription(): void {
+		$calls = [];
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$calls) {
+			$calls[] = $u;
+			return $this->response(200, ['id' => 100, 'iid' => 7, 'project_id' => 42, 'title' => 'X', 'description' => '', 'references' => ['full' => 'group/app#7'], 'web_url' => 'u']);
+		});
+		$issue = $this->client->getIssue($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app']);
+		$this->assertNull($issue->renderedDescription);
+		$this->assertCount(1, $calls, 'no markdown render request for an empty description');
+	}
+
+	public function testGetCommentsRenderBodies(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/markdown')) {
+				$body = json_decode($o['body'], true);
+				return $this->response(200, ['html' => '<p>' . $body['text'] . '</p>']);
+			}
+			return $this->response(200, [
+				['id' => 1, 'author' => ['name' => 'A'], 'body' => 'hello', 'created_at' => 'x'],
+				['id' => 2, 'author' => ['name' => 'B'], 'body' => '', 'created_at' => 'y'],
+				['id' => 3, 'system' => true, 'body' => 'changed status'],
+			]);
+		});
+		$comments = $this->client->getComments($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app']);
+		$this->assertCount(2, $comments, 'system notes filtered out');
+		$this->assertSame('<p>hello</p>', $comments[0]->renderedBody);
+		$this->assertNull($comments[1]->renderedBody, 'empty body → no render');
 	}
 
 	public function testUpdateIssuePutsFields(): void {
@@ -203,5 +263,38 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame('POST', $captured['method']);
 		$this->assertStringContainsString('/projects/42/issues/7/add_spent_time', $captured['url']);
 		$this->assertSame('3600s', $captured['options']['query']['duration']);
+	}
+
+	public function testGetCreateMetaListsProjects(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, [
+				['id' => 42, 'name_with_namespace' => 'Group / App'],
+				['id' => 7, 'name_with_namespace' => 'Group / Lib'],
+			]);
+		});
+		$meta = $this->client->getCreateMeta($this->connection);
+		$this->assertStringContainsString('/api/v4/projects', $captured['url']);
+		$this->assertSame('30', $captured['options']['query']['min_access_level']);
+		$this->assertCount(2, $meta['projects']);
+		$this->assertSame('42', $meta['projects'][0]['id']);
+		$this->assertSame('Group / App', $meta['projects'][0]['name']);
+		$this->assertFalse($meta['capabilities']['type']);
+	}
+
+	public function testCreateIssuePostsTitleAndDescription(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(201, ['id' => 1, 'iid' => 9, 'project_id' => 42, 'title' => 'New', 'references' => ['full' => 'group/app#9'], 'web_url' => 'u']);
+		});
+		$issue = $this->client->createIssue($this->connection, ['project' => '42', 'title' => 'New', 'description' => 'Body']);
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/projects/42/issues', $captured['url']);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame('New', $body['title']);
+		$this->assertSame('Body', $body['description']);
+		$this->assertSame('#9', $issue->displayId);
 	}
 }

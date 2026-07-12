@@ -66,6 +66,25 @@ interface TrackerClientInterface {
 	/** Whether this tracker exposes a structured attachment list + upload. */
 	public function supportsAttachments(): bool;
 
+	/** Whether this tracker supports creating new issues. */
+	public function supportsCreate(): bool;
+
+	/**
+	 * Targets (projects/repos) the user can create an issue in, plus any required
+	 * type list per target (Jira issue types, Redmine trackers). `capabilities.type`
+	 * is true when a type must be chosen.
+	 *
+	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
+	 */
+	public function getCreateMeta(Connection $connection): array;
+
+	/**
+	 * Create a new issue and return it (normalized, with its ref).
+	 *
+	 * @param array{project: string, type?: string, title: string, description?: string} $target
+	 */
+	public function createIssue(Connection $connection, array $target): Issue;
+
 	/**
 	 * List an issue's attachments.
 	 *

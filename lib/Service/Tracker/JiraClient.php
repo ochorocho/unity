@@ -419,6 +419,108 @@ class JiraClient extends AbstractTrackerClient {
 		return $this->getIssue($connection, $refParts);
 	}
 
+	public function supportsCreate(): bool {
+		return true;
+	}
+
+	public function getCreateMeta(Connection $connection): array {
+		$projects = [];
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/createmeta', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['expand' => 'projects.issuetypes'],
+				], $connection),
+				'Create meta',
+			);
+			foreach ($data['projects'] ?? [] as $p) {
+				if (!is_array($p)) {
+					continue;
+				}
+				$types = [];
+				foreach ($p['issuetypes'] ?? [] as $it) {
+					if (is_array($it) && ($it['subtask'] ?? false) !== true) {
+						$types[] = ['id' => (string)($it['id'] ?? ''), 'name' => (string)($it['name'] ?? '')];
+					}
+				}
+				$projects[] = ['id' => (string)($p['key'] ?? ''), 'name' => (string)($p['name'] ?? $p['key'] ?? ''), 'types' => $types];
+			}
+		} catch (TrackerException $e) {
+			// Newer Jira Cloud dropped the expandable createmeta; fall back to a bare
+			// project list. Types are then resolved per project at create time.
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/project', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['maxResults' => '100'],
+				], $connection),
+				'Projects',
+			);
+			foreach ($data as $p) {
+				if (is_array($p)) {
+					$projects[] = ['id' => (string)($p['key'] ?? ''), 'name' => (string)($p['name'] ?? $p['key'] ?? ''), 'types' => []];
+				}
+			}
+		}
+		return ['projects' => $projects, 'capabilities' => ['type' => true, 'typeRequired' => true]];
+	}
+
+	public function createIssue(Connection $connection, array $target): Issue {
+		$projectKey = (string)$target['project'];
+		if ($projectKey === '') {
+			throw new TrackerException('A project is required');
+		}
+		$typeId = (string)($target['type'] ?? '');
+		if ($typeId === '') {
+			$typeId = $this->defaultIssueTypeId($connection, $projectKey);
+		}
+		if ($typeId === '') {
+			throw new TrackerException('An issue type is required');
+		}
+		$fields = [
+			'project' => ['key' => $projectKey],
+			'issuetype' => ['id' => $typeId],
+			'summary' => (string)$target['title'],
+		];
+		$description = (string)($target['description'] ?? '');
+		if ($description !== '') {
+			$fields['description'] = $this->encodeBody($connection, $description);
+		}
+		$data = $this->json(
+			$this->request('POST', $this->apiRoot($connection) . '/issue', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode(['fields' => $fields]),
+			], $connection),
+			'Create issue',
+		);
+		$key = (string)($data['key'] ?? '');
+		if ($key === '') {
+			throw new TrackerException('Create failed: no issue key returned');
+		}
+		return $this->getIssue($connection, ['key' => $key]);
+	}
+
+	/** First non-subtask issue type for a project (used when none was chosen). */
+	private function defaultIssueTypeId(Connection $connection, string $projectKey): string {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/createmeta', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['projectKeys' => $projectKey, 'expand' => 'projects.issuetypes'],
+				], $connection),
+				'Create meta',
+			);
+			foreach ($data['projects'] ?? [] as $p) {
+				foreach ($p['issuetypes'] ?? [] as $it) {
+					if (is_array($it) && ($it['subtask'] ?? false) !== true) {
+						return (string)($it['id'] ?? '');
+					}
+				}
+			}
+		} catch (TrackerException $e) {
+		}
+		return '';
+	}
+
 	public function getEditMeta(Connection $connection, array $refParts): array {
 		$key = (string)($refParts['key'] ?? '');
 		$server = $this->isServer($connection);

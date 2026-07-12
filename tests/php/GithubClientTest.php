@@ -161,4 +161,35 @@ class GithubClientTest extends TestCase {
 		$this->expectException(TrackerException::class);
 		$this->client->fetchFile($this->connection, ['owner' => 'o', 'repo' => 'r', 'number' => '1'], 'https://evil.example/x.png');
 	}
+
+	public function testGetCreateMetaFiltersRepos(): void {
+		$this->http->method('request')->willReturnCallback(fn ($m, $u, $o) => $this->response(200, [
+			['full_name' => 'octocat/Hello-World', 'has_issues' => true, 'permissions' => ['push' => true]],
+			['full_name' => 'octocat/ReadOnly', 'has_issues' => true, 'permissions' => ['push' => false]],
+			['full_name' => 'octocat/NoIssues', 'has_issues' => false, 'permissions' => ['push' => true]],
+		]));
+		$meta = $this->client->getCreateMeta($this->connection);
+		$this->assertCount(1, $meta['projects'], 'only writable repos with issues enabled');
+		$this->assertSame('octocat/Hello-World', $meta['projects'][0]['id']);
+		$this->assertFalse($meta['capabilities']['type']);
+	}
+
+	public function testCreateIssuePostsToRepo(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(201, [
+				'number' => 12, 'title' => 'New',
+				'repository_url' => 'https://api.github.com/repos/octocat/Hello-World',
+				'html_url' => 'https://github.com/octocat/Hello-World/issues/12',
+			]);
+		});
+		$issue = $this->client->createIssue($this->connection, ['project' => 'octocat/Hello-World', 'title' => 'New', 'description' => 'Body']);
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/repos/octocat/Hello-World/issues', $captured['url']);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame('New', $body['title']);
+		$this->assertSame('Body', $body['body']);
+		$this->assertSame('#12', $issue->displayId);
+	}
 }
