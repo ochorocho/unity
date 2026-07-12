@@ -34,6 +34,11 @@
 				@update:text="onDescriptionTask" />
 		</div>
 
+		<IssueAttachments v-if="supportsAttachments"
+			:issue-ref="issue.ref"
+			:reload-key="attachmentsReloadKey"
+			@changed="attachmentsReloadKey++" />
+
 		<div v-if="supportsTime" class="unity-time">
 			<div class="unity-time-header">
 				<span class="unity-time-total">
@@ -86,13 +91,14 @@ import AddComment from './AddComment.vue'
 import LogTime from './LogTime.vue'
 import RenderedText from './RenderedText.vue'
 import TimeRecords from './TimeRecords.vue'
+import IssueAttachments from './IssueAttachments.vue'
 import IssueEdit from './IssueEdit.vue'
 import { trackerById } from '../trackers.js'
 import { humanizeDuration } from '../duration.js'
 
 export default {
 	name: 'IssueDetail',
-	components: { NcButton, NcLoadingIcon, NcDialog, CommentList, AddComment, LogTime, RenderedText, TimeRecords, IssueEdit },
+	components: { NcButton, NcLoadingIcon, NcDialog, CommentList, AddComment, LogTime, RenderedText, TimeRecords, IssueAttachments, IssueEdit },
 	props: {
 		issue: { type: Object, required: true },
 		comments: { type: Array, default: () => [] },
@@ -103,6 +109,7 @@ export default {
 		return {
 			showLogModal: false,
 			recordsReloadKey: 0,
+			attachmentsReloadKey: 0,
 			editing: false,
 			editRecord: null,
 		}
@@ -125,6 +132,9 @@ export default {
 		},
 		supportsTime() {
 			return trackerById(this.issue.tracker).timeTracking
+		},
+		supportsAttachments() {
+			return trackerById(this.issue.tracker).attachments
 		},
 		timeSpentText() {
 			return humanizeDuration(this.issue.timeSpentSeconds || 0)

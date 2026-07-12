@@ -15,7 +15,7 @@
 
 <script>
 import NcRichText from '@nextcloud/vue/components/NcRichText'
-import { proxifyImages } from '../markdown.js'
+import { proxifyImages, imageAttributes } from '../markdown.js'
 import { renderTextile, renderHtml } from '../render.js'
 import { toggleTaskAt } from '../tasklist.js'
 import { emojify } from '../emoji.js'
@@ -44,7 +44,56 @@ export default {
 			return emojify(this.text)
 		},
 	},
+	mounted() {
+		if (this.format === 'markdown' && this.$refs.mdRoot) {
+			// NcRichText renders (and re-renders on text change) asynchronously, so
+			// reapply the dimensions whenever the rendered subtree changes.
+			this.imageObserver = new MutationObserver(() => this.applyImageDimensions())
+			this.imageObserver.observe(this.$refs.mdRoot, { childList: true, subtree: true })
+			this.$nextTick(() => this.applyImageDimensions())
+		}
+	},
+	beforeUnmount() {
+		if (this.imageObserver) {
+			this.imageObserver.disconnect()
+			this.imageObserver = null
+		}
+	},
 	methods: {
+		// Apply GitLab-style image width/height (stripped from the markdown source)
+		// as attributes on the rendered <img>; combined with the max-width:100% /
+		// height:auto CSS the browser scales them responsively.
+		applyImageDimensions() {
+			if (this.format !== 'markdown' || !this.$refs.mdRoot) {
+				return
+			}
+			const dims = imageAttributes(emojify(this.text))
+			if (dims.size === 0) {
+				return
+			}
+			this.$refs.mdRoot.querySelectorAll('img').forEach((img) => {
+				const match = /[?&]src=([^&]+)/.exec(img.getAttribute('src') || '')
+				if (!match) {
+					return
+				}
+				let url
+				try {
+					url = decodeURIComponent(match[1])
+				} catch (e) {
+					return
+				}
+				const d = dims.get(url)
+				if (!d) {
+					return
+				}
+				if (d.width && img.getAttribute('width') !== d.width) {
+					img.setAttribute('width', d.width)
+				}
+				if (d.height && img.getAttribute('height') !== d.height) {
+					img.setAttribute('height', d.height)
+				}
+			})
+		},
 		onInteractTodo(id) {
 			if (!this.editable || !this.$refs.mdRoot) {
 				return

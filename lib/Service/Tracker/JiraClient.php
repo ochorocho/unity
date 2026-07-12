@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace OCA\Unity\Service\Tracker;
 
 use OCA\Unity\AppInfo\Application;
+use OCA\Unity\Model\Attachment;
 use OCA\Unity\Model\Comment;
 use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
@@ -239,6 +240,85 @@ class JiraClient extends AbstractTrackerClient {
 		], $connection);
 		$data = $this->json($response, 'Get issue');
 		return $this->normalizeIssue($connection, $data);
+	}
+
+	public function supportsAttachments(): bool {
+		return true;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return Attachment[]
+	 */
+	public function getAttachments(Connection $connection, array $refParts): array {
+		$key = (string)($refParts['key'] ?? '');
+		$data = $this->json(
+			$this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key), [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => ['fields' => 'attachment'],
+			], $connection),
+			'Get attachments',
+		);
+		$attachments = [];
+		foreach (($data['fields']['attachment'] ?? []) as $raw) {
+			if (is_array($raw)) {
+				$attachments[] = $this->normalizeAttachment($raw);
+			}
+		}
+		return $attachments;
+	}
+
+	/**
+	 * @param array<mixed> $raw
+	 */
+	private function normalizeAttachment(array $raw): Attachment {
+		$thumb = $raw['thumbnail'] ?? null;
+		return new Attachment(
+			(string)($raw['id'] ?? ''),
+			(string)($raw['filename'] ?? ''),
+			(string)($raw['mimeType'] ?? 'application/octet-stream'),
+			(int)($raw['size'] ?? 0),
+			(string)($raw['content'] ?? ''),
+			is_string($thumb) && $thumb !== '' ? $thumb : null,
+			(string)($raw['author']['displayName'] ?? ''),
+			$raw['created'] ?? null,
+		);
+	}
+
+	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment {
+		$key = (string)($refParts['key'] ?? '');
+		// Multipart upload; must not send the JSON Content-Type, and Jira requires
+		// the X-Atlassian-Token: no-check header on this endpoint.
+		$auth = $this->authHeaders($connection);
+		unset($auth['Content-Type']);
+		$headers = ['X-Atlassian-Token' => 'no-check', 'User-Agent' => Application::USER_AGENT] + $auth;
+		$data = $this->json(
+			$this->request('POST', $this->apiRoot($connection) . '/issue/' . rawurlencode($key) . '/attachments', [
+				'headers' => $headers,
+				'multipart' => [[
+					'name' => 'file',
+					'contents' => $content,
+					'filename' => $filename,
+					'headers' => ['Content-Type' => $mimeType !== '' ? $mimeType : 'application/octet-stream'],
+				]],
+			], $connection),
+			'Upload attachment',
+		);
+		// Jira returns an array of the created attachment objects.
+		$first = $data[0] ?? null;
+		if (is_array($first)) {
+			return $this->normalizeAttachment($first);
+		}
+		throw new TrackerException('Upload failed: unexpected response');
+	}
+
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
+		$this->json(
+			$this->request('DELETE', $this->apiRoot($connection) . '/attachment/' . rawurlencode($attachmentId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete attachment',
+		);
 	}
 
 	public function getComments(Connection $connection, array $refParts): array {

@@ -81,6 +81,49 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	public function attachments(string $ref): DataResponse {
+		try {
+			return new DataResponse($this->issueService->getAttachments($this->userId ?? '', $ref));
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function uploadAttachment(string $ref): DataResponse {
+		$file = $this->request->getUploadedFile('file');
+		if (!is_array($file) || (int)($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+			return new DataResponse(['error' => 'No file uploaded'], Http::STATUS_BAD_REQUEST);
+		}
+		$content = file_get_contents((string)$file['tmp_name']);
+		if ($content === false) {
+			return new DataResponse(['error' => 'Could not read uploaded file'], Http::STATUS_BAD_REQUEST);
+		}
+		try {
+			$attachment = $this->issueService->uploadAttachment(
+				$this->userId ?? '',
+				$ref,
+				(string)($file['name'] ?? 'file'),
+				(string)($file['type'] ?? '') ?: 'application/octet-stream',
+				$content,
+			);
+			return new DataResponse($attachment, Http::STATUS_CREATED);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function deleteAttachment(string $ref, string $attachmentId): DataResponse {
+		try {
+			$this->issueService->deleteAttachment($this->userId ?? '', $ref, $attachmentId);
+			return new DataResponse([], Http::STATUS_NO_CONTENT);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
 	#[NoCSRFRequired]
 	public function file(string $ref, string $src): DataDisplayResponse {
 		try {

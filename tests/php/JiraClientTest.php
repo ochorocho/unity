@@ -461,4 +461,70 @@ class JiraClientTest extends TestCase {
 		$this->assertStringContainsString('Jira Server', $result['message']);
 		$this->assertSame('Carol', $result['user']);
 	}
+
+	public function testGetAttachmentsMapsFieldsAttachment(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, ['fields' => ['attachment' => [[
+				'id' => '10050', 'filename' => 'shot.png', 'mimeType' => 'image/png', 'size' => 4096,
+				'content' => 'https://acme.atlassian.net/rest/api/3/attachment/content/10050',
+				'thumbnail' => 'https://acme.atlassian.net/rest/api/3/attachment/thumbnail/10050',
+				'author' => ['displayName' => 'Alice'], 'created' => '2026-03-01T10:00:00.000+0000',
+			]]]]);
+		});
+
+		$attachments = $this->jira->getAttachments($this->connection, ['key' => 'ABC-1']);
+
+		$this->assertSame('attachment', $captured['options']['query']['fields']);
+		$this->assertStringContainsString('/issue/ABC-1', $captured['url']);
+		$this->assertCount(1, $attachments);
+		$this->assertSame('10050', $attachments[0]->id);
+		$this->assertSame('shot.png', $attachments[0]->filename);
+		$this->assertSame('image/png', $attachments[0]->mimeType);
+		$this->assertSame(4096, $attachments[0]->size);
+		$this->assertSame('https://acme.atlassian.net/rest/api/3/attachment/content/10050', $attachments[0]->src);
+		$this->assertSame('https://acme.atlassian.net/rest/api/3/attachment/thumbnail/10050', $attachments[0]->thumbnailSrc);
+		$this->assertSame('Alice', $attachments[0]->author);
+	}
+
+	public function testUploadAttachmentPostsMultipartWithToken(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(200, [[
+				'id' => '10060', 'filename' => 'doc.pdf', 'mimeType' => 'application/pdf', 'size' => 12,
+				'content' => 'https://acme.atlassian.net/rest/api/3/attachment/content/10060',
+			]]);
+		});
+
+		$att = $this->jira->uploadAttachment($this->connection, ['key' => 'ABC-1'], 'doc.pdf', 'application/pdf', 'BYTES');
+
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/issue/ABC-1/attachments', $captured['url']);
+		$this->assertSame('no-check', $captured['options']['headers']['X-Atlassian-Token']);
+		// Multipart upload must not carry the JSON Content-Type header.
+		$this->assertArrayNotHasKey('Content-Type', $captured['options']['headers']);
+		$this->assertStringStartsWith('Basic ', $captured['options']['headers']['Authorization']);
+		$part = $captured['options']['multipart'][0];
+		$this->assertSame('file', $part['name']);
+		$this->assertSame('doc.pdf', $part['filename']);
+		$this->assertSame('BYTES', $part['contents']);
+		$this->assertSame('10060', $att->id);
+		$this->assertSame('doc.pdf', $att->filename);
+	}
+
+	public function testDeleteAttachmentIssuesDelete(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(204, '');
+		});
+
+		$this->jira->deleteAttachment($this->connection, ['key' => 'ABC-1'], '10050');
+
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/rest/api/3/attachment/10050', $captured['url']);
+		$this->assertStringStartsWith('Basic ', $captured['options']['headers']['Authorization']);
+	}
 }

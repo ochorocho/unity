@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace OCA\Unity\Service\Tracker;
 
 use OCA\Unity\AppInfo\Application;
+use OCA\Unity\Model\Attachment;
 use OCA\Unity\Model\Connection;
 use OCP\Http\Client\IClient;
 use OCP\Http\Client\IClientService;
@@ -33,6 +34,41 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 
 	public function supportsTimeTracking(): bool {
 		return true;
+	}
+
+	/** Default: no structured attachment support (e.g. GitLab, GitHub). */
+	public function supportsAttachments(): bool {
+		return false;
+	}
+
+	/**
+	 * Default: no attachment list. Overridden by trackers with an attachment API.
+	 *
+	 * @param array $refParts
+	 * @return Attachment[]
+	 */
+	public function getAttachments(Connection $connection, array $refParts): array {
+		return [];
+	}
+
+	/**
+	 * Default: uploading attachments is unsupported. Trackers with an attachment
+	 * API override this.
+	 *
+	 * @param array $refParts
+	 */
+	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment {
+		throw new TrackerException('Attachments are not supported for this tracker');
+	}
+
+	/**
+	 * Default: deleting attachments is unsupported. Trackers with an attachment
+	 * API override this.
+	 *
+	 * @param array $refParts
+	 */
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
+		throw new TrackerException('Attachments are not supported for this tracker');
 	}
 
 	/**

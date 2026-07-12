@@ -129,4 +129,17 @@ class IssueServiceTest extends TestCase {
 		$titles = array_map(static fn (Issue $i): string => $i->title, $result['issues']);
 		$this->assertSame(['Apple', 'Zebra'], $titles);
 	}
+
+	public function testDeleteAttachmentForwardsWhenSupported(): void {
+		$this->client->method('supportsAttachments')->willReturn(true);
+		$this->client->expects($this->once())->method('deleteAttachment');
+		$this->service->deleteAttachment('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '9');
+	}
+
+	public function testDeleteAttachmentRejectsUnsupportedTracker(): void {
+		$this->client->method('supportsAttachments')->willReturn(false);
+		$this->client->expects($this->never())->method('deleteAttachment');
+		$this->expectException(TrackerException::class);
+		$this->service->deleteAttachment('admin', Ref::encode('github', 'c1', ['owner' => 'o']), '9');
+	}
 }

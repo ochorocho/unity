@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 namespace OCA\Unity\Service\Tracker;
 
+use OCA\Unity\Model\Attachment;
 use OCA\Unity\Model\Comment;
 use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
@@ -332,6 +333,94 @@ class RedmineClient extends AbstractTrackerClient {
 				'headers' => $this->defaultHeaders($connection),
 			], $connection),
 			'Delete time',
+		);
+	}
+
+	public function supportsAttachments(): bool {
+		return true;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return Attachment[]
+	 */
+	public function getAttachments(Connection $connection, array $refParts): array {
+		$id = (string)($refParts['id'] ?? '');
+		$data = $this->json(
+			$this->request('GET', $this->base($connection) . '/issues/' . rawurlencode($id) . '.json', [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => ['include' => 'attachments'],
+			], $connection),
+			'Get attachments',
+		);
+		$attachments = [];
+		foreach (($data['issue']['attachments'] ?? []) as $raw) {
+			if (is_array($raw)) {
+				$attachments[] = $this->normalizeAttachment($raw);
+			}
+		}
+		return $attachments;
+	}
+
+	/**
+	 * @param array<mixed> $raw
+	 */
+	private function normalizeAttachment(array $raw): Attachment {
+		$thumb = $raw['thumbnail_url'] ?? null;
+		return new Attachment(
+			(string)($raw['id'] ?? ''),
+			(string)($raw['filename'] ?? ''),
+			(string)($raw['content_type'] ?? 'application/octet-stream'),
+			(int)($raw['filesize'] ?? 0),
+			(string)($raw['content_url'] ?? ''),
+			is_string($thumb) && $thumb !== '' ? $thumb : null,
+			(string)($raw['author']['name'] ?? ''),
+			$raw['created_on'] ?? null,
+		);
+	}
+
+	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment {
+		$id = (string)($refParts['id'] ?? '');
+		$type = $mimeType !== '' ? $mimeType : 'application/octet-stream';
+		// Step 1: upload the raw bytes to obtain a token.
+		$upload = $this->json(
+			$this->request('POST', $this->base($connection) . '/uploads.json?filename=' . rawurlencode($filename), [
+				'headers' => ['X-Redmine-API-Key' => $connection->token, 'Content-Type' => 'application/octet-stream'],
+				'body' => $content,
+			], $connection),
+			'Upload file',
+		);
+		$token = (string)($upload['upload']['token'] ?? '');
+		if ($token === '') {
+			throw new TrackerException('Upload failed: no token returned');
+		}
+		// Step 2: attach the token to the issue.
+		$this->json(
+			$this->request('PUT', $this->base($connection) . '/issues/' . rawurlencode($id) . '.json', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode(['issue' => ['uploads' => [[
+					'token' => $token,
+					'filename' => $filename,
+					'content_type' => $type,
+				]]]]),
+			], $connection),
+			'Attach file',
+		);
+		// Redmine's PUT returns no body; return the freshly-created attachment.
+		foreach (array_reverse($this->getAttachments($connection, $refParts)) as $att) {
+			if ($att->filename === $filename) {
+				return $att;
+			}
+		}
+		return new Attachment('', $filename, $type, strlen($content), '');
+	}
+
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
+		$this->json(
+			$this->request('DELETE', $this->base($connection) . '/attachments/' . rawurlencode($attachmentId) . '.json', [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete attachment',
 		);
 	}
 
