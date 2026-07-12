@@ -156,6 +156,18 @@ class IssueService {
 	}
 
 	/**
+	 * @throws TrackerException
+	 */
+	public function deleteAttachment(string $userId, string $ref, string $attachmentId): void {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		if (!$client->supportsAttachments()) {
+			throw new TrackerException('Attachments are not supported for this tracker');
+		}
+		$client->deleteAttachment($connection, $parts, $attachmentId);
+		$this->syncState->markTouched($userId, $ref);
+	}
+
+	/**
 	 * @return \OCA\Unity\Model\TimeRecord[]
 	 * @throws TrackerException
 	 */

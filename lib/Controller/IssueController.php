@@ -114,6 +114,16 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	public function deleteAttachment(string $ref, string $attachmentId): DataResponse {
+		try {
+			$this->issueService->deleteAttachment($this->userId ?? '', $ref, $attachmentId);
+			return new DataResponse([], Http::STATUS_NO_CONTENT);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
 	#[NoCSRFRequired]
 	public function file(string $ref, string $src): DataDisplayResponse {
 		try {

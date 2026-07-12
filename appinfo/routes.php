@@ -26,6 +26,7 @@ return [
 		['name' => 'issue#addComment', 'url' => '/issues/{ref}/comments', 'verb' => 'POST'],
 		['name' => 'issue#attachments', 'url' => '/issues/{ref}/attachments', 'verb' => 'GET'],
 		['name' => 'issue#uploadAttachment', 'url' => '/issues/{ref}/attachments', 'verb' => 'POST'],
+		['name' => 'issue#deleteAttachment', 'url' => '/issues/{ref}/attachments/{attachmentId}', 'verb' => 'DELETE'],
 		['name' => 'issue#updateComment', 'url' => '/issues/{ref}/comments/{commentId}', 'verb' => 'PUT'],
 		['name' => 'issue#timeRecords', 'url' => '/issues/{ref}/time', 'verb' => 'GET'],
 		['name' => 'issue#logTime', 'url' => '/issues/{ref}/time', 'verb' => 'POST'],

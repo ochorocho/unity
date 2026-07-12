@@ -83,6 +83,13 @@ interface TrackerClientInterface {
 	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment;
 
 	/**
+	 * Delete an attachment by its provider id.
+	 *
+	 * @param array $refParts
+	 */
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void;
+
+	/**
 	 * List stored time entries / worklogs for an issue.
 	 *
 	 * @param array $refParts

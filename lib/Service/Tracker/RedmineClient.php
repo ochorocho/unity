@@ -415,6 +415,15 @@ class RedmineClient extends AbstractTrackerClient {
 		return new Attachment('', $filename, $type, strlen($content), '');
 	}
 
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
+		$this->json(
+			$this->request('DELETE', $this->base($connection) . '/attachments/' . rawurlencode($attachmentId) . '.json', [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete attachment',
+		);
+	}
+
 	protected function fileHeaders(Connection $connection): array {
 		return ['X-Redmine-API-Key' => $connection->token];
 	}

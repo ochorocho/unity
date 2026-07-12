@@ -513,4 +513,18 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('10060', $att->id);
 		$this->assertSame('doc.pdf', $att->filename);
 	}
+
+	public function testDeleteAttachmentIssuesDelete(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(204, '');
+		});
+
+		$this->jira->deleteAttachment($this->connection, ['key' => 'ABC-1'], '10050');
+
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/rest/api/3/attachment/10050', $captured['url']);
+		$this->assertStringStartsWith('Basic ', $captured['options']['headers']['Authorization']);
+	}
 }

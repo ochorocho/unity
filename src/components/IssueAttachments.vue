@@ -42,6 +42,16 @@
 					:title="t('unity', 'Download')">
 					<Download :size="18" />
 				</a>
+				<NcButton type="tertiary"
+					:aria-label="t('unity', 'Delete attachment')"
+					:title="t('unity', 'Delete attachment')"
+					:disabled="deletingId === a.id"
+					@click="remove(a)">
+					<template #icon>
+						<NcLoadingIcon v-if="deletingId === a.id" :size="18" />
+						<Delete v-else :size="18" />
+					</template>
+				</NcButton>
 			</li>
 		</ul>
 		<p v-else class="unity-attachments-empty">{{ t('unity', 'No attachments.') }}</p>
@@ -60,17 +70,18 @@
 <script>
 import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
-import { showError, showSuccess } from '@nextcloud/dialogs'
+import { showConfirmation, showError, showSuccess } from '@nextcloud/dialogs'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
 import Paperclip from 'vue-material-design-icons/Paperclip.vue'
 import Download from 'vue-material-design-icons/Download.vue'
+import Delete from 'vue-material-design-icons/Delete.vue'
 import FileIcon from 'vue-material-design-icons/File.vue'
 
 export default {
 	name: 'IssueAttachments',
-	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, Download, FileIcon },
+	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, Download, Delete, FileIcon },
 	props: {
 		issueRef: { type: String, required: true },
 		reloadKey: { type: Number, default: 0 },
@@ -81,6 +92,7 @@ export default {
 			attachments: [],
 			loading: false,
 			uploading: false,
+			deletingId: null,
 			lightbox: null,
 		}
 	},
@@ -160,6 +172,30 @@ export default {
 				showError(err?.response?.data?.error || this.t('unity', 'Could not upload the attachment'))
 			} finally {
 				this.uploading = false
+			}
+		},
+		async remove(a) {
+			const confirmed = await showConfirmation({
+				name: this.t('unity', 'Delete attachment'),
+				text: this.t('unity', 'Delete “{name}”? This cannot be undone.', { name: a.filename }),
+				labelConfirm: this.t('unity', 'Delete'),
+				severity: 'error',
+			})
+			if (!confirmed) {
+				return
+			}
+			this.deletingId = a.id
+			try {
+				const ref = encodeURIComponent(this.issueRef)
+				const attachmentId = encodeURIComponent(a.id)
+				await axios.delete(generateUrl('/apps/unity/issues/{ref}/attachments/{attachmentId}', { ref, attachmentId }))
+				showSuccess(this.t('unity', 'Attachment deleted'))
+				await this.fetch()
+				this.$emit('changed')
+			} catch (err) {
+				showError(err?.response?.data?.error || this.t('unity', 'Could not delete the attachment'))
+			} finally {
+				this.deletingId = null
 			}
 		},
 	},

@@ -62,6 +62,16 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	}
 
 	/**
+	 * Default: deleting attachments is unsupported. Trackers with an attachment
+	 * API override this.
+	 *
+	 * @param array $refParts
+	 */
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
+		throw new TrackerException('Attachments are not supported for this tracker');
+	}
+
+	/**
 	 * Default: no itemized records (e.g. GitHub). Overridden by trackers that
 	 * expose a worklog / time-entry list.
 	 *

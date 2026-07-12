@@ -312,6 +312,15 @@ class JiraClient extends AbstractTrackerClient {
 		throw new TrackerException('Upload failed: unexpected response');
 	}
 
+	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
+		$this->json(
+			$this->request('DELETE', $this->apiRoot($connection) . '/attachment/' . rawurlencode($attachmentId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete attachment',
+		);
+	}
+
 	public function getComments(Connection $connection, array $refParts): array {
 		$key = (string)($refParts['key'] ?? '');
 		$response = $this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key) . '/comment', [

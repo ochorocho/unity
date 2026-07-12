@@ -273,4 +273,18 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame('notes.pdf', $att->filename);
 		$this->assertSame(100, $att->size);
 	}
+
+	public function testDeleteAttachment(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(204, '');
+		});
+
+		$this->client->deleteAttachment($this->connection, ['id' => '55'], '9');
+
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/attachments/9.json', $captured['url']);
+		$this->assertSame('key', $captured['options']['headers']['X-Redmine-API-Key']);
+	}
 }
