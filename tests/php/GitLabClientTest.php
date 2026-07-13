@@ -223,9 +223,13 @@ class GitLabClientTest extends TestCase {
 				$body = json_decode($o['body'], true);
 				return $this->response(200, ['html' => '<p>' . $body['text'] . '</p>']);
 			}
+			if (str_contains($u, '/user')) {
+				// REST GET /user → the connection's own account.
+				return $this->response(200, ['username' => 'alice']);
+			}
 			return $this->response(200, [
-				['id' => 1, 'author' => ['name' => 'A'], 'body' => 'hello', 'created_at' => 'x'],
-				['id' => 2, 'author' => ['name' => 'B'], 'body' => '', 'created_at' => 'y'],
+				['id' => 1, 'author' => ['name' => 'A', 'username' => 'alice'], 'body' => 'hello', 'created_at' => 'x'],
+				['id' => 2, 'author' => ['name' => 'B', 'username' => 'bob'], 'body' => '', 'created_at' => 'y'],
 				['id' => 3, 'system' => true, 'body' => 'changed status'],
 			]);
 		});
@@ -233,6 +237,22 @@ class GitLabClientTest extends TestCase {
 		$this->assertCount(2, $comments, 'system notes filtered out');
 		$this->assertSame('<p>hello</p>', $comments[0]->renderedBody);
 		$this->assertNull($comments[1]->renderedBody, 'empty body → no render');
+		// alice authored the first note → editable/deletable; Bob's is not.
+		$this->assertTrue($comments[0]->editable);
+		$this->assertTrue($comments[0]->deletable);
+		$this->assertFalse($comments[1]->editable);
+		$this->assertFalse($comments[1]->deletable);
+	}
+
+	public function testDeleteCommentDeletesNote(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u];
+			return $this->response(200, '');
+		});
+		$this->client->deleteComment($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app'], '5');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/projects/42/issues/7/notes/5', $captured['url']);
 	}
 
 	public function testUpdateIssuePutsFields(): void {

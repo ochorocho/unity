@@ -114,21 +114,42 @@ class GithubClient extends AbstractTrackerClient {
 			], $connection),
 			'Get comments',
 		);
+		$currentLogin = $this->currentUserLogin($connection);
 		$comments = [];
 		foreach ($data as $raw) {
 			if (!is_array($raw)) {
 				continue;
 			}
+			$login = (string)($raw['user']['login'] ?? '');
+			// Only the comment author may edit/delete it (GitHub logins are case-insensitive).
+			$own = $currentLogin !== '' && strcasecmp($login, $currentLogin) === 0;
 			$comments[] = new Comment(
 				(string)($raw['id'] ?? ''),
-				(string)($raw['user']['login'] ?? ''),
+				$login,
 				$raw['user']['avatar_url'] ?? null,
 				(string)($raw['body'] ?? ''),
 				$raw['created_at'] ?? null,
 				$raw['html_url'] ?? null,
+				editable: $own,
+				deletable: $own,
 			);
 		}
 		return $comments;
+	}
+
+	/** The connection user's own GitHub login, or '' if it can't be resolved. */
+	private function currentUserLogin(Connection $connection): string {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/user', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Get current user',
+			);
+			return (string)($data['login'] ?? '');
+		} catch (TrackerException $e) {
+			return '';
+		}
 	}
 
 	public function addComment(Connection $connection, array $refParts, string $body): Comment {
@@ -170,6 +191,17 @@ class GithubClient extends AbstractTrackerClient {
 			(string)($raw['body'] ?? $body),
 			$raw['created_at'] ?? null,
 			$raw['html_url'] ?? null,
+		);
+	}
+
+	public function deleteComment(Connection $connection, array $refParts, string $commentId): void {
+		$owner = rawurlencode((string)($refParts['owner'] ?? ''));
+		$repo = rawurlencode((string)($refParts['repo'] ?? ''));
+		$this->json(
+			$this->request('DELETE', $this->apiRoot($connection) . '/repos/' . $owner . '/' . $repo . '/issues/comments/' . rawurlencode($commentId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete comment',
 		);
 	}
 

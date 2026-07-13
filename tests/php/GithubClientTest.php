@@ -103,6 +103,37 @@ class GithubClientTest extends TestCase {
 		$this->assertSame('x', json_decode($captured['options']['body'], true)['body']);
 	}
 
+	public function testGetCommentsGatesOwnership(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/user')) {
+				// GET /user → the connection's own account.
+				return $this->response(200, ['login' => 'Octo']);
+			}
+			return $this->response(200, [
+				['id' => 1, 'user' => ['login' => 'octo'], 'body' => 'hello', 'created_at' => 'x', 'html_url' => 'h1'],
+				['id' => 2, 'user' => ['login' => 'mona'], 'body' => 'world', 'created_at' => 'y', 'html_url' => 'h2'],
+			]);
+		});
+		$comments = $this->client->getComments($this->connection, ['owner' => 'o', 'repo' => 'r', 'number' => '10']);
+		$this->assertCount(2, $comments);
+		// octo authored the first comment (login match is case-insensitive); mona did not.
+		$this->assertTrue($comments[0]->editable);
+		$this->assertTrue($comments[0]->deletable);
+		$this->assertFalse($comments[1]->editable);
+		$this->assertFalse($comments[1]->deletable);
+	}
+
+	public function testDeleteCommentDeletes(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u];
+			return $this->response(204, '');
+		});
+		$this->client->deleteComment($this->connection, ['owner' => 'o', 'repo' => 'r', 'number' => '1'], '5');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/repos/o/r/issues/comments/5', $captured['url']);
+	}
+
 	public function testUpdateIssuePatchesFields(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

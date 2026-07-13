@@ -69,6 +69,7 @@
 			:comments="comments"
 			:format="issue.bodyFormat"
 			:issue-ref="issue.ref"
+			:tracker="issue.tracker"
 			:editable="true"
 			@updated="$emit('updated')" />
 

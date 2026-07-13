@@ -119,6 +119,7 @@ class RedmineClient extends AbstractTrackerClient {
 			], $connection),
 			'Get comments',
 		);
+		$currentUserId = $this->currentUserId($connection);
 		$comments = [];
 		foreach (($data['issue']['journals'] ?? []) as $journal) {
 			if (!is_array($journal)) {
@@ -128,12 +129,15 @@ class RedmineClient extends AbstractTrackerClient {
 			if (trim($notes) === '') {
 				continue;
 			}
+			// Only the note's author may edit it.
+			$own = $currentUserId !== '' && (string)($journal['user']['id'] ?? '') === $currentUserId;
 			$comments[] = new Comment(
 				(string)($journal['id'] ?? ''),
 				(string)($journal['user']['name'] ?? ''),
 				null,
 				$notes,
 				$journal['created_on'] ?? null,
+				editable: $own,
 			);
 		}
 		return $comments;

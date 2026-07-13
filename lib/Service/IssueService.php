@@ -154,6 +154,18 @@ class IssueService {
 	}
 
 	/**
+	 * @throws TrackerException
+	 */
+	public function deleteComment(string $userId, string $ref, string $commentId): void {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		// Guard server-side: only the author may delete their comment, and only on
+		// trackers that support it (deletable is false otherwise).
+		$this->assertCommentAllows($client, $connection, $parts, $commentId);
+		$client->deleteComment($connection, $parts, $commentId);
+		$this->syncState->markTouched($userId, $ref);
+	}
+
+	/**
 	 * Fetch an issue-referenced file/image via the tracker's credentials.
 	 *
 	 * @return array{body: string, contentType: string}
@@ -294,6 +306,27 @@ class IssueService {
 			return;
 		}
 		throw new TrackerException('Time entry not found');
+	}
+
+	/**
+	 * Verify the current user may delete the given comment (they authored it and
+	 * the tracker supports deletion — i.e. it is flagged deletable). Mirrors
+	 * assertRecordAllows for time entries.
+	 *
+	 * @param array $parts
+	 * @throws TrackerException
+	 */
+	private function assertCommentAllows(TrackerClientInterface $client, Connection $connection, array $parts, string $commentId): void {
+		foreach ($client->getComments($connection, $parts) as $comment) {
+			if ($comment->id !== $commentId) {
+				continue;
+			}
+			if (!$comment->deletable) {
+				throw new TrackerException('You can only delete your own comments');
+			}
+			return;
+		}
+		throw new TrackerException('Comment not found');
 	}
 
 	private function cachedSearch(

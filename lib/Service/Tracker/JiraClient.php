@@ -327,17 +327,25 @@ class JiraClient extends AbstractTrackerClient {
 			'headers' => $this->defaultHeaders($connection),
 		], $connection);
 		$data = $this->json($response, 'Get comments');
+		$server = $this->isServer($connection);
+		$me = $this->currentUserKey($connection);
 		$comments = [];
 		foreach (($data['comments'] ?? []) as $raw) {
 			if (!is_array($raw)) {
 				continue;
 			}
+			// Cloud identifies users by accountId, Server/DC by name. Only the
+			// comment author may edit/delete it.
+			$authorKey = $server ? (string)($raw['author']['name'] ?? '') : (string)($raw['author']['accountId'] ?? '');
+			$own = $me !== '' && $authorKey === $me;
 			$comments[] = new Comment(
 				(string)($raw['id'] ?? ''),
 				(string)($raw['author']['displayName'] ?? ''),
 				$raw['author']['avatarUrls']['48x48'] ?? null,
 				$this->decodeBody($connection, $raw['body'] ?? null),
 				$raw['created'] ?? null,
+				editable: $own,
+				deletable: $own,
 			);
 		}
 		return $comments;
@@ -374,6 +382,16 @@ class JiraClient extends AbstractTrackerClient {
 			$raw['author']['avatarUrls']['48x48'] ?? null,
 			$this->decodeBody($connection, $raw['body'] ?? null),
 			$raw['created'] ?? null,
+		);
+	}
+
+	public function deleteComment(Connection $connection, array $refParts, string $commentId): void {
+		$key = (string)($refParts['key'] ?? '');
+		$this->json(
+			$this->request('DELETE', $this->apiRoot($connection) . '/issue/' . rawurlencode($key) . '/comment/' . rawurlencode($commentId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete comment',
 		);
 	}
 

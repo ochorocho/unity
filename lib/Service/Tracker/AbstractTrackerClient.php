@@ -162,6 +162,16 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	}
 
 	/**
+	 * Default: deleting comments is unsupported. Trackers whose API can delete a
+	 * comment override this; the rest never flag a comment deletable.
+	 *
+	 * @param array $refParts
+	 */
+	public function deleteComment(Connection $connection, array $refParts, string $commentId): void {
+		throw new TrackerException('Deleting comments is not supported for this tracker');
+	}
+
+	/**
 	 * Fetch a referenced file with the connection's credentials. The URL is
 	 * resolved and host-validated by resolveFileUrl() (SSRF guard) before any
 	 * request is made.

@@ -271,6 +271,16 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	public function deleteComment(string $ref, string $commentId): DataResponse {
+		try {
+			$this->issueService->deleteComment($this->userId ?? '', $ref, $commentId);
+			return new DataResponse([], Http::STATUS_NO_CONTENT);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
 	public function logTime(string $ref, int $seconds, string $comment = '', string $startedAt = ''): DataResponse {
 		if ($seconds <= 0) {
 			return new DataResponse(['error' => 'Invalid duration'], Http::STATUS_BAD_REQUEST);

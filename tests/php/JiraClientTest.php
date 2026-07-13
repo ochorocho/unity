@@ -348,6 +348,38 @@ class JiraClientTest extends TestCase {
 		$this->assertFalse($records[1]->deletable);
 	}
 
+	public function testGetCommentsGatesOwnership(): void {
+		$adf = fn (string $text): array => ['type' => 'doc', 'version' => 1, 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => $text]]]]];
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u) use ($adf) {
+			if (str_contains($u, '/myself')) {
+				return $this->response(200, ['accountId' => 'acc-me']);
+			}
+			return $this->response(200, ['comments' => [
+				['id' => '1', 'author' => ['displayName' => 'Alice', 'accountId' => 'acc-me'], 'body' => $adf('hello'), 'created' => 'x'],
+				['id' => '2', 'author' => ['displayName' => 'Bob', 'accountId' => 'acc-bob'], 'body' => $adf('world'), 'created' => 'y'],
+			]]);
+		});
+		$comments = $this->jira->getComments($this->connection, ['key' => 'ABC-1']);
+		$this->assertCount(2, $comments);
+		$this->assertSame('hello', $comments[0]->body);
+		// The connection user (acc-me) authored the first comment.
+		$this->assertTrue($comments[0]->editable);
+		$this->assertTrue($comments[0]->deletable);
+		$this->assertFalse($comments[1]->editable);
+		$this->assertFalse($comments[1]->deletable);
+	}
+
+	public function testDeleteCommentDeletes(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u];
+			return $this->response(204, '');
+		});
+		$this->jira->deleteComment($this->connection, ['key' => 'ABC-1'], '5');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/issue/ABC-1/comment/5', $captured['url']);
+	}
+
 	public function testLogTimeViaTempoWhenTempoTokenPresent(): void {
 		$conn = new Connection('c1', 'jira', 'My Jira', 'https://acme.atlassian.net', 'me@acme.io', 'secret-token', 'tempo-secret');
 		$tempo = null;

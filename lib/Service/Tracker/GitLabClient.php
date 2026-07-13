@@ -116,18 +116,24 @@ class GitLabClient extends AbstractTrackerClient {
 			'Get comments',
 		);
 		$path = (string)($refParts['path'] ?? '');
+		$currentUsername = $this->currentUsername($connection);
 		$comments = [];
 		foreach ($data as $raw) {
 			if (!is_array($raw) || ($raw['system'] ?? false) === true) {
 				continue;
 			}
 			$body = (string)($raw['body'] ?? '');
+			// Only the author may edit/delete their own note (identity is the
+			// username, not the display name).
+			$own = $currentUsername !== '' && (string)($raw['author']['username'] ?? '') === $currentUsername;
 			$comment = new Comment(
 				(string)($raw['id'] ?? ''),
 				(string)($raw['author']['name'] ?? $raw['author']['username'] ?? ''),
 				$raw['author']['avatar_url'] ?? null,
 				$body,
 				$raw['created_at'] ?? null,
+				editable: $own,
+				deletable: $own,
 			);
 			$comment->renderedBody = $this->renderMarkdown($connection, $body, $path);
 			$comments[] = $comment;
@@ -183,6 +189,15 @@ class GitLabClient extends AbstractTrackerClient {
 		);
 		$comment->renderedBody = $this->renderMarkdown($connection, $newBody, (string)($refParts['path'] ?? ''));
 		return $comment;
+	}
+
+	public function deleteComment(Connection $connection, array $refParts, string $commentId): void {
+		$this->json(
+			$this->request('DELETE', $this->issueUrl($connection, $refParts) . '/notes/' . rawurlencode($commentId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete comment',
+		);
 	}
 
 	public function updateIssue(Connection $connection, array $refParts, array $changes): Issue {

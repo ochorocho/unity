@@ -26,6 +26,18 @@ class Comment implements JsonSerializable {
 		 * this sanitized HTML; `body` still holds the raw source.
 		 */
 		public ?string $renderedBody = null,
+		/**
+		 * Whether the connection's current user authored this comment and may
+		 * therefore edit it. Set per-tracker in getComments(); the UI gates the
+		 * edit affordance on it (same convention as TimeRecord::$editable).
+		 */
+		public bool $editable = false,
+		/**
+		 * Whether the current user may delete this comment: they authored it AND
+		 * the tracker's API supports deleting comments (e.g. Redmine cannot delete
+		 * journal notes, so this stays false there). Set per-tracker in getComments().
+		 */
+		public bool $deletable = false,
 	) {
 	}
 

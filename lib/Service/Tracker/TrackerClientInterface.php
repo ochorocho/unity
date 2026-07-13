@@ -52,6 +52,15 @@ interface TrackerClientInterface {
 	public function updateComment(Connection $connection, array $refParts, string $commentId, string $body): Comment;
 
 	/**
+	 * Delete an existing comment. Trackers whose API cannot delete comments throw
+	 * (the default in AbstractTrackerClient); such comments are never flagged
+	 * deletable, so the UI won't offer the action.
+	 *
+	 * @param array $refParts
+	 */
+	public function deleteComment(Connection $connection, array $refParts, string $commentId): void;
+
+	/**
 	 * Fetch a file/image referenced from an issue (e.g. an inline attachment)
 	 * using the connection's credentials. Implementations MUST restrict which
 	 * hosts they fetch (SSRF guard).

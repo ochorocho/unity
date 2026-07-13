@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 namespace OCA\Unity\Tests;
 
+use OCA\Unity\Model\Comment;
 use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
 use OCA\Unity\Model\IssueQuery;
@@ -117,6 +118,23 @@ class IssueServiceTest extends TestCase {
 		]);
 		$this->client->expects($this->once())->method('deleteTime');
 		$this->service->deleteTime('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '42');
+	}
+
+	public function testDeleteCommentRejectsCommentNotOwnedByUser(): void {
+		$this->client->method('getComments')->willReturn([
+			new Comment('5', 'Bob', null, 'hi', null, deletable: false),
+		]);
+		$this->client->expects($this->never())->method('deleteComment');
+		$this->expectException(TrackerException::class);
+		$this->service->deleteComment('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '5');
+	}
+
+	public function testDeleteCommentForwardsWhenOwned(): void {
+		$this->client->method('getComments')->willReturn([
+			new Comment('5', 'Alice', null, 'hi', null, deletable: true),
+		]);
+		$this->client->expects($this->once())->method('deleteComment');
+		$this->service->deleteComment('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '5');
 	}
 
 	public function testMergesAndSortsByTitle(): void {

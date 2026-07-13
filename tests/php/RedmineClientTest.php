@@ -142,6 +142,33 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame('edited', $comment->body);
 	}
 
+	public function testGetCommentsMapsJournalsAndGatesOwnership(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/users/current.json')) {
+				return $this->response(200, ['user' => ['id' => 42, 'name' => 'Alice']]);
+			}
+			return $this->response(200, ['issue' => ['journals' => [
+				['id' => 10, 'user' => ['id' => 42, 'name' => 'Alice'], 'notes' => 'hello', 'created_on' => 'x'],
+				['id' => 11, 'user' => ['id' => 99, 'name' => 'Bob'], 'notes' => 'world', 'created_on' => 'y'],
+				['id' => 12, 'user' => ['id' => 42, 'name' => 'Alice'], 'notes' => '', 'created_on' => 'z'],
+			]]]);
+		});
+		$comments = $this->client->getComments($this->connection, ['id' => '55']);
+		$this->assertCount(2, $comments, 'empty notes filtered out');
+		$this->assertSame('hello', $comments[0]->body);
+		// Alice is the connection user → her note is editable; Bob's is not.
+		$this->assertTrue($comments[0]->editable);
+		$this->assertFalse($comments[1]->editable);
+		// Redmine's API cannot delete journal notes, so nothing is ever deletable.
+		$this->assertFalse($comments[0]->deletable);
+		$this->assertFalse($comments[1]->deletable);
+	}
+
+	public function testDeleteCommentUnsupported(): void {
+		$this->expectException(TrackerException::class);
+		$this->client->deleteComment($this->connection, ['id' => '55'], '99');
+	}
+
 	public function testUpdateIssuePutsIssue(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
