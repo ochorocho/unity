@@ -284,15 +284,21 @@ export default {
 	display: flex;
 	gap: 12px;
 	align-items: flex-start;
+	/* Let the title shrink so the h2 wraps instead of pushing the actions
+	   (Edit / ✕) off-screen on narrow/phone widths. */
+	min-width: 0;
 }
 .unity-detail-actions {
 	display: flex;
 	gap: 6px;
 	align-items: center;
+	/* Keep the Edit/close buttons intact when the title is long. */
+	flex-shrink: 0;
 }
 .unity-detail-title h2 {
 	margin: 4px 0 0;
 	font-size: 1.2em;
+	overflow-wrap: anywhere;
 }
 .unity-detail-link {
 	font-weight: bold;
@@ -350,5 +356,14 @@ export default {
 }
 .unity-log-modal {
 	padding: 0 16px 16px;
+}
+
+/* On phones the detail is a full-screen overlay whose sticky header starts at
+   the top-left — exactly where the app-navigation toggle (hamburger) floats.
+   Clear it so the badge/title aren't hidden behind the toggle. */
+@media (max-width: 700px) {
+	.unity-detail-header {
+		padding-top: 36px;
+	}
 }
 </style>

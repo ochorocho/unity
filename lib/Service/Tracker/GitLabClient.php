@@ -287,7 +287,7 @@ class GitLabClient extends AbstractTrackerClient {
 		return $this->normalizeIssue($connection, $data);
 	}
 
-	public function getEditMeta(Connection $connection, array $refParts): array {
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
 		$project = rawurlencode((string)($refParts['project'] ?? ''));
 		$assignees = [];
 		try {

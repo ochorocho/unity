@@ -562,6 +562,40 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('ABC-5', $issue->displayId);
 	}
 
+	public function testGetCreateMetaReturnsProjectIssueTypes(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/createmeta/AKE/issuetypes') && !preg_match('#/issuetypes/\d#', $u)) {
+				return $this->response(200, ['issueTypes' => [
+					['id' => '1', 'name' => 'Bug', 'subtask' => false],
+					['id' => '5', 'name' => 'Sub-task', 'subtask' => true],
+					['id' => '10000', 'name' => 'Story', 'subtask' => false],
+				]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->jira->getCreateMeta($this->connection, null, 'AKE', null);
+		// Subtasks filtered out; {id,name} mapping.
+		$this->assertSame([
+			['id' => '1', 'name' => 'Bug'],
+			['id' => '10000', 'name' => 'Story'],
+		], $meta['types']);
+	}
+
+	public function testGetCreateMetaOmitsTypesWhenTypeChosen(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [
+					['fieldId' => 'priority', 'name' => 'Priority', 'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '3', 'name' => 'High']]],
+				]]);
+			}
+			// The per-project issuetypes endpoint must not be needed when a type is given.
+			return $this->response(200, ['issueTypes' => [['id' => '99', 'name' => 'ShouldNotAppear', 'subtask' => false]]]);
+		});
+		$meta = $this->jira->getCreateMeta($this->connection, null, 'AKE', '1');
+		$this->assertSame([], $meta['types']);
+		$this->assertSame('priority', $meta['fields'][0]['id']);
+	}
+
 	public function testGetCreateMetaDescribesFieldsFromSchema(): void {
 		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
 			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
@@ -646,5 +680,90 @@ class JiraClientTest extends TestCase {
 		$this->assertArrayHasKey('priority', $byId);
 		$this->assertArrayNotHasKey('summary', $byId);
 		$this->assertSame('4', $byId['priority']['value']);
+	}
+
+	public function testGetEditMetaOffersProjectIssueTypes(): void {
+		// The edit form gets the same full project type list as the create dialog,
+		// independent of the current issue's editmeta operations.
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/transitions')) {
+				return $this->response(200, ['transitions' => []]);
+			}
+			if (str_contains($u, '/user/assignable/search')) {
+				return $this->response(200, []);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes') && preg_match('#/issuetypes/\d#', $u) !== 1) {
+				return $this->response(200, ['issueTypes' => [
+					['id' => '1', 'name' => 'Bug', 'subtask' => false],
+					['id' => '5', 'name' => 'Epic', 'subtask' => false],
+					['id' => '99', 'name' => 'Sub', 'subtask' => true],
+				]]);
+			}
+			if (str_contains($u, '/editmeta')) {
+				return $this->response(200, ['fields' => ['issuetype' => ['operations' => []]]]);
+			}
+			if (preg_match('#/issue/AKE-4(\?|$)#', $u) === 1) {
+				return $this->response(200, ['fields' => ['issuetype' => ['id' => '1', 'name' => 'Bug']]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->jira->getEditMeta($this->connection, ['key' => 'AKE-4']);
+		// Shown even though this issue's editmeta grants no `set` operation.
+		$this->assertTrue($meta['capabilities']['type']);
+		$this->assertSame([['id' => '1', 'name' => 'Bug'], ['id' => '5', 'name' => 'Epic']], $meta['types']);
+		$this->assertSame('1', $meta['typeId']);
+	}
+
+	public function testGetEditMetaTypeHiddenWhenProjectHasNoTypes(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/transitions')) {
+				return $this->response(200, ['transitions' => []]);
+			}
+			if (str_contains($u, '/editmeta')) {
+				return $this->response(200, ['fields' => ['issuetype' => ['operations' => []]]]);
+			}
+			if (preg_match('#/issue/AKE-4(\?|$)#', $u) === 1) {
+				return $this->response(200, ['fields' => ['issuetype' => ['id' => '1']]]);
+			}
+			return $this->response(200, []); // no issue types available
+		});
+		$meta = $this->jira->getEditMeta($this->connection, ['key' => 'AKE-4']);
+		$this->assertFalse($meta['capabilities']['type']);
+		$this->assertSame([], $meta['types']);
+	}
+
+	public function testGetEditMetaTypeOverrideDescribesNewTypeFields(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/transitions')) {
+				return $this->response(200, ['transitions' => []]);
+			}
+			if (str_contains($u, '/user/assignable/search')) {
+				return $this->response(200, []);
+			}
+			if (str_contains($u, '/editmeta')) {
+				return $this->response(200, ['fields' => ['issuetype' => ['operations' => ['set'], 'allowedValues' => []]]]);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes/5')) {
+				return $this->response(200, ['fields' => [
+					['fieldId' => 'customfield_epicname', 'name' => 'Epic Name', 'schema' => ['type' => 'string']],
+				]]);
+			}
+			return $this->response(200, ['fields' => ['issuetype' => ['id' => '1']]]);
+		});
+		$meta = $this->jira->getEditMeta($this->connection, ['key' => 'AKE-4'], '5');
+		$this->assertContains('customfield_epicname', array_column($meta['fields'], 'id'));
+	}
+
+	public function testUpdateIssueEncodesType(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'PUT' && str_contains($u, '/issue/')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(204, '');
+			}
+			return $this->response(200, ['key' => 'AKE-4', 'fields' => ['summary' => 'X', 'project' => ['name' => 'AK-E']]]);
+		});
+		$this->jira->updateIssue($this->connection, ['key' => 'AKE-4'], ['type' => '5']);
+		$this->assertSame(['id' => '5'], $captured['fields']['issuetype']);
 	}
 }

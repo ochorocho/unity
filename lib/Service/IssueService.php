@@ -228,9 +228,9 @@ class IssueService {
 	 * @return array<string, mixed>
 	 * @throws TrackerException
 	 */
-	public function getEditMeta(string $userId, string $ref): array {
+	public function getEditMeta(string $userId, string $ref, ?string $type = null): array {
 		[$client, $connection, $parts] = $this->resolve($userId, $ref);
-		return $client->getEditMeta($connection, $parts);
+		return $client->getEditMeta($connection, $parts, $type);
 	}
 
 	/**

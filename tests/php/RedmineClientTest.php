@@ -414,4 +414,36 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame('2026-08-01', $byId['due_date']['value']);
 		$this->assertSame('15', $byId['cf_4']['value']);
 	}
+
+	public function testGetEditMetaReturnsTrackersAndCurrentType(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/issue_statuses.json')) {
+				return $this->response(200, ['issue_statuses' => [['id' => 1, 'name' => 'New']]]);
+			}
+			if (str_contains($u, '/trackers.json')) {
+				return $this->response(200, ['trackers' => [['id' => 1, 'name' => 'Bug'], ['id' => 2, 'name' => 'Feature']]]);
+			}
+			if (preg_match('#/issues/55\.json#', $u) === 1) {
+				return $this->response(200, ['issue' => ['id' => 55, 'project' => ['id' => 27], 'tracker' => ['id' => 2]]]);
+			}
+			return $this->response(200, ['memberships' => []]);
+		});
+		$meta = $this->client->getEditMeta($this->connection, ['id' => '55']);
+		$this->assertTrue($meta['capabilities']['type']);
+		$this->assertSame([['id' => '1', 'name' => 'Bug'], ['id' => '2', 'name' => 'Feature']], $meta['types']);
+		$this->assertSame('2', $meta['typeId']);
+	}
+
+	public function testUpdateIssueEncodesTypeAsTracker(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'PUT' && str_contains($u, '/issues/55.json')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(204, '');
+			}
+			return $this->response(200, ['issue' => ['id' => 55, 'subject' => 'X', 'project' => ['name' => 'P'], 'tracker' => ['id' => 1]]]);
+		});
+		$this->client->updateIssue($this->connection, ['id' => '55'], ['type' => '2']);
+		$this->assertSame(2, $captured['issue']['tracker_id']);
+	}
 }

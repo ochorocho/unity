@@ -284,7 +284,7 @@ class GithubClient extends AbstractTrackerClient {
 		return $this->normalizeIssue($connection, $data);
 	}
 
-	public function getEditMeta(Connection $connection, array $refParts): array {
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
 		$owner = rawurlencode((string)($refParts['owner'] ?? ''));
 		$repo = rawurlencode((string)($refParts['repo'] ?? ''));
 		$repoBase = $this->apiRoot($connection) . '/repos/' . $owner . '/' . $repo;

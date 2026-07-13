@@ -206,6 +206,7 @@ class IssueController extends Controller {
 		?string $assignee = null,
 		?array $labels = null,
 		?array $fields = null,
+		?string $type = null,
 	): DataResponse {
 		$changes = [];
 		if ($title !== null) {
@@ -219,6 +220,9 @@ class IssueController extends Controller {
 		}
 		if ($assignee !== null) {
 			$changes['assignee'] = $assignee;
+		}
+		if ($type !== null && $type !== '') {
+			$changes['type'] = $type;
 		}
 		if ($labels !== null) {
 			$changes['labels'] = $labels;
@@ -237,9 +241,9 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
-	public function editMeta(string $ref): DataResponse {
+	public function editMeta(string $ref, string $type = ''): DataResponse {
 		try {
-			return new DataResponse($this->issueService->getEditMeta($this->userId ?? '', $ref));
+			return new DataResponse($this->issueService->getEditMeta($this->userId ?? '', $ref, $type === '' ? null : $type));
 		} catch (TrackerException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}

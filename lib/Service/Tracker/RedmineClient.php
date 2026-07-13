@@ -202,6 +202,9 @@ class RedmineClient extends AbstractTrackerClient {
 			$assignee = (string)$changes['assignee'];
 			$issue['assigned_to_id'] = $assignee === '' ? '' : (int)$assignee;
 		}
+		if (array_key_exists('type', $changes) && (string)$changes['type'] !== '') {
+			$issue['tracker_id'] = (int)$changes['type'];
+		}
 		if (isset($changes['fields']) && is_array($changes['fields'])) {
 			$this->applyFields($issue, $changes['fields']);
 		}
@@ -294,7 +297,7 @@ class RedmineClient extends AbstractTrackerClient {
 		return $this->normalizeIssue($connection, is_array($data['issue'] ?? null) ? $data['issue'] : []);
 	}
 
-	public function getEditMeta(Connection $connection, array $refParts): array {
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
 		$statuses = [];
 		try {
 			$data = $this->json(
@@ -310,8 +313,11 @@ class RedmineClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		// Trackers (Redmine's "type") are global and freely changeable on edit.
+		$types = $this->optionList($connection, '/trackers.json', 'trackers');
 		$assignees = [];
 		$fields = [];
+		$typeId = '';
 		try {
 			$id = (string)($refParts['id'] ?? '');
 			$issueData = $this->json(
@@ -322,7 +328,9 @@ class RedmineClient extends AbstractTrackerClient {
 			);
 			$issue = is_array($issueData['issue'] ?? null) ? $issueData['issue'] : [];
 			$projectId = (string)($issue['project']['id'] ?? '');
-			$trackerId = (string)($issue['tracker']['id'] ?? '');
+			$typeId = (string)($issue['tracker']['id'] ?? '');
+			// Describe fields for the prospective type when switching, else the current one.
+			$effectiveTracker = ($type !== null && $type !== '') ? $type : $typeId;
 			if ($projectId !== '') {
 				$memberships = $this->json(
 					$this->request('GET', $this->base($connection) . '/projects/' . rawurlencode($projectId) . '/memberships.json', [
@@ -337,16 +345,18 @@ class RedmineClient extends AbstractTrackerClient {
 					}
 				}
 				$inlineCustom = is_array($issue['custom_fields'] ?? null) ? $issue['custom_fields'] : [];
-				$fields = $this->describeFields($connection, $projectId, $trackerId, $this->currentFieldValues($issue), $inlineCustom);
+				$fields = $this->describeFields($connection, $projectId, $effectiveTracker, $this->currentFieldValues($issue), $inlineCustom);
 			}
 		} catch (TrackerException $e) {
 		}
 		return [
-			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => false, 'labelsFreeText' => false],
+			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => false, 'labelsFreeText' => false, 'type' => $types !== []],
 			'statuses' => $statuses,
 			'assignees' => $assignees,
 			'labels' => [],
 			'fields' => $fields,
+			'types' => $types,
+			'typeId' => $typeId,
 		];
 	}
 

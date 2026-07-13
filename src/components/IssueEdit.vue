@@ -7,6 +7,12 @@
 		<MarkupEditor v-model="form.description" :format="issue.bodyFormat" :issue-ref="issue.ref" :tracker="issue.tracker" :rows="8" />
 
 		<template v-if="meta">
+			<div v-if="meta.capabilities.type && types.length" class="unity-edit-field">
+				<label class="unity-edit-label">{{ t('unity', 'Type') }}</label>
+				<select v-model="typeId" class="unity-edit-select" :disabled="fieldsReloading">
+					<option v-for="ty in types" :key="ty.id" :value="ty.id">{{ ty.name }}</option>
+				</select>
+			</div>
 			<div v-if="meta.capabilities.status" class="unity-edit-field">
 				<label class="unity-edit-label">{{ t('unity', 'Status') }}</label>
 				<select v-model="form.status" class="unity-edit-select">
@@ -30,6 +36,7 @@
 					:input-label="t('unity', 'Labels')"
 					:placeholder="meta.capabilities.labelsFreeText ? t('unity', 'Search or type to add labels') : t('unity', 'Search labels')" />
 			</div>
+			<NcLoadingIcon v-if="fieldsReloading" :size="20" />
 			<DynamicField v-for="f in fields"
 				:key="f.id"
 				:descriptor="f"
@@ -82,11 +89,24 @@ export default {
 			fields: [],
 			fieldValues: {},
 			fieldsOriginal: {},
+			// Issue type: the choices, the selected id, the original, and a reload flag.
+			types: [],
+			typeId: '',
+			originalTypeId: '',
+			fieldsReloading: false,
 		}
 	},
 	computed: {
 		labelOptions() {
 			return (this.meta?.labels || []).map((l) => l.name)
+		},
+	},
+	watch: {
+		// Fields are type-specific; reload them when the user switches the issue type.
+		typeId(newVal, oldVal) {
+			if (oldVal !== '' && newVal !== oldVal) {
+				this.reloadFields()
+			}
 		},
 	},
 	async mounted() {
@@ -108,9 +128,9 @@ export default {
 				this.loadingMeta = false
 			}
 		},
-		preselect() {
-			// Seed dynamic fields from the current value each edit-meta descriptor carries.
-			this.fields = Array.isArray(this.meta.fields) ? this.meta.fields : []
+		// Seed fields + their values (and the diff baseline) from a descriptor list.
+		seedFields(fieldList) {
+			this.fields = Array.isArray(fieldList) ? fieldList : []
 			const values = {}
 			for (const f of this.fields) {
 				if (f.value !== undefined && f.value !== null) {
@@ -125,6 +145,13 @@ export default {
 			}
 			this.fieldValues = values
 			this.fieldsOriginal = JSON.parse(JSON.stringify(values))
+		},
+		preselect() {
+			this.seedFields(this.meta.fields)
+			// Issue type (where the provider allows changing it).
+			this.types = Array.isArray(this.meta.types) ? this.meta.types : []
+			this.typeId = this.meta.typeId || ''
+			this.originalTypeId = this.typeId
 			// Preselect current values by matching names → provider ids where possible.
 			const byName = (list, name) => (list.find((x) => x.name === name) || {}).id || ''
 			// GitLab/GitHub carry native status ids (opened/closed/open); match directly first.
@@ -154,6 +181,10 @@ export default {
 				if (this.meta && this.meta.capabilities.labels) {
 					payload.labels = this.form.labels
 				}
+				// Send the type only when the user changed it.
+				if (this.meta && this.meta.capabilities.type && this.typeId && this.typeId !== this.originalTypeId) {
+					payload.type = this.typeId
+				}
 				// Only send dynamic fields whose value actually changed.
 				const changedFields = {}
 				for (const f of this.fields) {
@@ -180,6 +211,23 @@ export default {
 		},
 		setFieldValue(id, value) {
 			this.fieldValues = { ...this.fieldValues, [id]: value }
+		},
+		// Re-fetch the field descriptors for the newly selected type.
+		async reloadFields() {
+			this.fieldsReloading = true
+			try {
+				const ref = encodeURIComponent(this.issue.ref)
+				const { data } = await axios.get(generateUrl('/apps/unity/issues/{ref}/edit-meta', { ref }), {
+					params: { type: this.typeId },
+				})
+				if (data && Array.isArray(data.fields)) {
+					this.seedFields(data.fields)
+				}
+			} catch (e) {
+				// Keep the current fields on a transient error.
+			} finally {
+				this.fieldsReloading = false
+			}
 		},
 	},
 }

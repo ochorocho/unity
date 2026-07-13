@@ -125,6 +125,8 @@ export default {
 			projectOptions: [],
 			projectsLoading: false,
 			projectSearchTimer: null,
+			// Issue types for the selected project (Jira fetches these per project).
+			projectTypes: [],
 			typeId: '',
 			title: '',
 			description: '',
@@ -157,6 +159,11 @@ export default {
 			return this.projectSelection ? this.projectSelection.id : ''
 		},
 		currentTypes() {
+			// Prefer types fetched for the selected project; fall back to those embedded
+			// in the project list (Redmine's global trackers, etc.).
+			if (this.projectTypes.length) {
+				return this.projectTypes
+			}
 			return this.selectedProject ? (this.selectedProject.types || []) : []
 		},
 		// "Project" for most trackers, "Repository" for GitHub.
@@ -188,6 +195,7 @@ export default {
 		// Types are project-specific; clear a stale selection when the project changes.
 		projectSelection() {
 			this.typeId = ''
+			this.projectTypes = []
 		},
 		// Re-fetch the dynamic field descriptors whenever the project/type changes.
 		fieldContext() {
@@ -209,6 +217,7 @@ export default {
 		onConnectionChange() {
 			this.projectSelection = null
 			this.projectOptions = []
+			this.projectTypes = []
 			this.typeId = ''
 			this.fields = []
 			this.fieldValues = {}
@@ -230,6 +239,11 @@ export default {
 				})
 				if (token !== this.fieldsToken) {
 					return
+				}
+				// The project-context response carries the project's issue types; keep them
+				// across the follow-up per-type call (which returns types: []).
+				if (data && Array.isArray(data.types) && data.types.length) {
+					this.projectTypes = data.types
 				}
 				this.fields = data && Array.isArray(data.fields) ? data.fields : []
 				this.seedFieldValues()

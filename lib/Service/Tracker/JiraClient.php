@@ -398,6 +398,9 @@ class JiraClient extends AbstractTrackerClient {
 		if (array_key_exists('labels', $changes) && is_array($changes['labels'])) {
 			$fields['labels'] = array_values(array_map('strval', $changes['labels']));
 		}
+		if (array_key_exists('type', $changes) && (string)$changes['type'] !== '') {
+			$fields['issuetype'] = ['id' => (string)$changes['type']];
+		}
 		if (isset($changes['fields']) && is_array($changes['fields']) && $changes['fields'] !== []) {
 			$schemas = $this->fieldSchemas(array_values($this->editMetaFields($connection, $key)));
 			$this->applyFields($fields, $changes['fields'], $schemas, $server);
@@ -428,11 +431,14 @@ class JiraClient extends AbstractTrackerClient {
 	}
 
 	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
-		// A project+type context asks only for that combination's field descriptors.
+		// A project(+type) context asks only for that project's issue types and the
+		// field descriptors for the chosen type.
 		if ($project !== null && $project !== '') {
+			$noType = ($type === null || $type === '');
 			return [
 				'projects' => [],
 				'capabilities' => ['type' => true, 'typeRequired' => true],
+				'types' => $noType ? $this->issueTypes($connection, $project) : [],
 				'fields' => $this->describeFields($this->createMetaFields($connection, $project, (string)$type)),
 			];
 		}
@@ -539,7 +545,7 @@ class JiraClient extends AbstractTrackerClient {
 		return '';
 	}
 
-	public function getEditMeta(Connection $connection, array $refParts): array {
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
 		$key = (string)($refParts['key'] ?? '');
 		$server = $this->isServer($connection);
 		$statuses = [];
@@ -576,19 +582,40 @@ class JiraClient extends AbstractTrackerClient {
 		} catch (TrackerException $e) {
 		}
 		$fields = [];
+		$typeId = '';
+		// Offer the project's full issue-type list (same as the create dialog) so the
+		// type can be changed on edit. Jira itself decides at save time whether a given
+		// change is permitted; where it isn't (type not on the edit screen), the PUT
+		// returns a clear error that surfaces to the user.
+		$types = $this->issueTypes($connection, $this->projectKeyOf($key));
 		try {
 			$editable = $this->editMetaFields($connection, $key);
 			$current = $this->currentFieldValues($connection, $key, array_keys($editable));
-			$fields = $this->describeFields(array_values($editable), $current);
+			$typeId = (string)($current['issuetype'] ?? '');
+			if ($type !== null && $type !== '') {
+				// Fields for the prospective type come from create-meta (edit-meta only
+				// describes the current type).
+				$fields = $this->describeFields($this->createMetaFields($connection, $this->projectKeyOf($key), $type));
+			} else {
+				$fields = $this->describeFields(array_values($editable), $current);
+			}
 		} catch (TrackerException $e) {
 		}
 		return [
-			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => true, 'labelsFreeText' => true],
+			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => true, 'labelsFreeText' => true, 'type' => $types !== []],
 			'statuses' => $statuses,
 			'assignees' => $assignees,
 			'labels' => [],
 			'fields' => $fields,
+			'types' => $types,
+			'typeId' => $typeId,
 		];
+	}
+
+	/** Project key from a Jira issue key (e.g. "AKE-4" → "AKE"). */
+	private function projectKeyOf(string $issueKey): string {
+		$pos = strrpos($issueKey, '-');
+		return $pos === false ? '' : substr($issueKey, 0, $pos);
 	}
 
 	// ---- Dynamic fields ----------------------------------------------------
@@ -599,6 +626,37 @@ class JiraClient extends AbstractTrackerClient {
 		'labels', 'attachment', 'issuelinks', 'timetracking', 'worklog', 'comment',
 		'status', 'resolution', 'parent', 'subtasks', 'security', 'watches',
 	];
+
+	/**
+	 * Issue types available for a project via the granular create-meta endpoint
+	 * (reliable, unlike the deprecated bulk `expand=projects.issuetypes`). Subtasks
+	 * are excluded.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function issueTypes(Connection $connection, string $projectKey): array {
+		if ($projectKey === '') {
+			return [];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/createmeta/' . rawurlencode($projectKey) . '/issuetypes', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['maxResults' => '200'],
+				], $connection),
+				'Issue types',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['issueTypes'] ?? [] as $it) {
+			if (is_array($it) && ($it['subtask'] ?? false) !== true) {
+				$out[] = ['id' => (string)($it['id'] ?? ''), 'name' => (string)($it['name'] ?? '')];
+			}
+		}
+		return $out;
+	}
 
 	/**
 	 * Field metadata for a project + issue type via the granular create-meta endpoint.

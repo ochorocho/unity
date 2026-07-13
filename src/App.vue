@@ -63,23 +63,31 @@
 
 					<div class="unity-split">
 						<div class="unity-list-pane">
-							<div v-if="canCreateAny" class="unity-list-toolbar">
-								<NcButton type="primary" @click="showCreate = true">
-									<template #icon><Plus :size="20" /></template>
-									{{ t('unity', 'New issue') }}
-								</NcButton>
+							<div class="unity-list-scroll">
+								<div v-if="canCreateAny" class="unity-list-toolbar">
+									<NcButton type="primary" @click="showCreate = true">
+										<template #icon><Plus :size="20" /></template>
+										{{ t('unity', 'New issue') }}
+									</NcButton>
+								</div>
+								<NcEmptyContent v-if="!loading && issues.length === 0"
+									:name="t('unity', 'No issues found')" />
+								<IssueList v-else
+									:issues="issues"
+									:selected-ref="activeRef"
+									@select="openIssue" />
+								<div class="unity-list-footer">
+									<NcButton v-if="hasMore && !loading" @click="loadMore">
+										{{ t('unity', 'Load more') }}
+									</NcButton>
+									<!-- Appending (Load more) keeps the list visible with a footer
+									     spinner; a full reload uses the overlay below instead. -->
+									<NcLoadingIcon v-if="loading && appending" :size="28" />
+								</div>
 							</div>
-							<NcEmptyContent v-if="!loading && issues.length === 0"
-								:name="t('unity', 'No issues found')" />
-							<IssueList v-else
-								:issues="issues"
-								:selected-ref="activeRef"
-								@select="openIssue" />
-							<div class="unity-list-footer">
-								<NcButton v-if="hasMore && !loading" @click="loadMore">
-									{{ t('unity', 'Load more') }}
-								</NcButton>
-								<NcLoadingIcon v-if="loading" :size="28" />
+							<!-- Full-list overlay while (re)loading the list from scratch. -->
+							<div v-if="loading && !appending" class="unity-list-overlay">
+								<NcLoadingIcon :size="44" />
 							</div>
 						</div>
 						<!-- v-show (not v-if): the pane node is created once and only toggles
@@ -175,6 +183,8 @@ export default {
 			showClosed,
 			activeConnection,
 			loading: false,
+			// Whether the in-flight load is appending (Load more) vs a full reload.
+			appending: false,
 			selected: null,
 			comments: [],
 			loadingRef: null,
@@ -286,6 +296,7 @@ export default {
 		},
 		async fetchIssues(append) {
 			this.loading = true
+			this.appending = append
 			try {
 				const params = {
 					term: this.term,
@@ -497,6 +508,8 @@ export default {
 	/* Let the panes shrink below their content height so they can scroll. */
 	min-height: 0;
 	align-items: stretch;
+	/* Positioning context for the mobile detail overlay (see media query below). */
+	position: relative;
 }
 .unity-list-pane {
 	/* Ratio-based basis:0 grow → the 40/60 split is fixed by ratio and never
@@ -506,8 +519,24 @@ export default {
 	min-width: 0;
 	min-height: 0;
 	height: 100%;
+	/* Positioning context for the loading overlay; scrolling lives on the inner
+	   wrapper so the overlay covers the visible pane, not the full scroll height. */
+	position: relative;
+	overflow: hidden;
+}
+.unity-list-scroll {
+	height: 100%;
 	overflow-y: auto;
 	scrollbar-gutter: stable;
+}
+.unity-list-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--color-main-background-translucent, rgba(255, 255, 255, 0.6));
 }
 .unity-detail-pane {
 	flex: 3 1 0;
@@ -535,5 +564,33 @@ export default {
 	display: flex;
 	justify-content: center;
 	padding: 12px 0;
+}
+
+/* Phone-width layout: show one pane at a time. The list fills the screen; when
+   an issue is opened the detail pane (v-show-toggled by `selected`) becomes a
+   full-screen overlay, and its ✕ (→ closeDetail) acts as "back" to the list. */
+@media (max-width: 700px) {
+	.unity-main {
+		padding: 8px 10px;
+	}
+	.unity-split {
+		gap: 0;
+	}
+	.unity-list-pane {
+		/* Fill the whole content area when nothing is selected. */
+		flex-basis: 100%;
+	}
+	.unity-detail-pane {
+		/* Overlay the content area. z-index stays below the framework's nav
+		   drawer and NcDialog layers, so the hamburger and modals sit on top. */
+		position: absolute;
+		inset: 0;
+		z-index: 30;
+		flex: none;
+		background: var(--color-main-background);
+		/* Drop the desktop divider/gutter — the pane is full-width now. */
+		border-inline-start: none;
+		padding-inline-start: 0;
+	}
 }
 </style>

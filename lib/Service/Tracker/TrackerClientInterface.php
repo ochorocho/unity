@@ -135,12 +135,16 @@ interface TrackerClientInterface {
 	 * Editable-field options for an issue (which fields are supported plus the
 	 * available statuses/assignees/labels). The optional `fields` list describes
 	 * provider-native fields writable on this issue, each carrying its current
-	 * `value` for preselecting the edit form.
+	 * `value` for preselecting the edit form. When `capabilities.type` is true the
+	 * issue's type can be changed: `types` lists the choices and `typeId` is the
+	 * current one. Passing `$type` returns the `fields` for that prospective type
+	 * (used to reload the form when the user switches type).
 	 *
 	 * @param array $refParts
-	 * @return array{capabilities: array<string, bool>, statuses: list<array{id: string, name: string}>, assignees: list<array{id: string, name: string}>, labels: list<array{id: string, name: string}>, fields?: list<array<string, mixed>>}
+	 * @param string|null $type prospective type id to describe fields for
+	 * @return array{capabilities: array<string, bool>, statuses: list<array{id: string, name: string}>, assignees: list<array{id: string, name: string}>, labels: list<array{id: string, name: string}>, fields?: list<array<string, mixed>>, types?: list<array{id: string, name: string}>, typeId?: string}
 	 */
-	public function getEditMeta(Connection $connection, array $refParts): array;
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array;
 
 	/**
 	 * @param array $refParts
