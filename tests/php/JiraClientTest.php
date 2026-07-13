@@ -561,4 +561,90 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('New', $body['fields']['summary']);
 		$this->assertSame('ABC-5', $issue->displayId);
 	}
+
+	public function testGetCreateMetaDescribesFieldsFromSchema(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [
+					['fieldId' => 'summary', 'name' => 'Summary', 'required' => true, 'schema' => ['type' => 'string']],
+					['fieldId' => 'priority', 'name' => 'Priority', 'required' => false, 'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '3', 'name' => 'High'], ['id' => '4', 'name' => 'Low']]],
+					['fieldId' => 'duedate', 'name' => 'Due', 'required' => false, 'schema' => ['type' => 'date']],
+					['fieldId' => 'customfield_1', 'name' => 'Sprints', 'required' => false, 'schema' => ['type' => 'array', 'items' => 'option'], 'allowedValues' => [['id' => '9', 'value' => 'S1']]],
+					['fieldId' => 'customfield_epic', 'name' => 'Epic', 'required' => false, 'schema' => ['type' => 'any']],
+					['fieldId' => 'attachment', 'name' => 'Attach', 'schema' => ['type' => 'array', 'items' => 'attachment']],
+				]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->jira->getCreateMeta($this->connection, null, 'AKE', '1');
+		$byId = [];
+		foreach ($meta['fields'] as $f) {
+			$byId[$f['id']] = $f;
+		}
+		$this->assertArrayNotHasKey('summary', $byId);
+		$this->assertArrayNotHasKey('attachment', $byId);
+		$this->assertArrayNotHasKey('customfield_epic', $byId); // type "any" is unrenderable
+		$this->assertSame('select', $byId['priority']['type']);
+		$this->assertSame([['id' => '3', 'name' => 'High'], ['id' => '4', 'name' => 'Low']], $byId['priority']['options']);
+		$this->assertSame('date', $byId['duedate']['type']);
+		$this->assertSame('multiselect', $byId['customfield_1']['type']);
+		$this->assertSame([['id' => '9', 'name' => 'S1']], $byId['customfield_1']['options']);
+	}
+
+	public function testCreateIssueEncodesDynamicFieldsPerSchema(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [
+					['fieldId' => 'priority', 'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '3']]],
+					['fieldId' => 'customfield_1', 'schema' => ['type' => 'array', 'items' => 'option'], 'allowedValues' => [['id' => '9']]],
+					['fieldId' => 'customfield_u', 'schema' => ['type' => 'user'], 'allowedValues' => [['id' => 'x']]],
+					['fieldId' => 'duedate', 'schema' => ['type' => 'date']],
+				]]);
+			}
+			if ($m === 'POST' && str_contains($u, '/issue') && !str_contains($u, 'createmeta')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			return $this->response(200, ['key' => 'AKE-9', 'fields' => ['summary' => 'T', 'project' => ['name' => 'AK-E']]]);
+		});
+		$this->jira->createIssue($this->connection, [
+			'project' => 'AKE', 'type' => '1', 'title' => 'T', 'description' => '',
+			'fields' => ['priority' => '3', 'customfield_1' => ['9'], 'customfield_u' => 'acc-1', 'duedate' => '2026-08-01'],
+		]);
+		$f = $captured['fields'];
+		$this->assertSame(['id' => '3'], $f['priority']);
+		$this->assertSame([['id' => '9']], $f['customfield_1']);
+		$this->assertSame(['accountId' => 'acc-1'], $f['customfield_u']); // Cloud user encoding
+		$this->assertSame('2026-08-01', $f['duedate']);
+	}
+
+	public function testGetEditMetaCarriesCurrentFieldValues(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/transitions')) {
+				return $this->response(200, ['transitions' => []]);
+			}
+			if (str_contains($u, '/user/assignable/search')) {
+				return $this->response(200, []);
+			}
+			if (str_contains($u, '/editmeta')) {
+				return $this->response(200, ['fields' => [
+					'priority' => ['name' => 'Priority', 'required' => false, 'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '4', 'name' => 'Low']]],
+					'summary' => ['name' => 'Summary', 'schema' => ['type' => 'string']],
+				]]);
+			}
+			if (preg_match('#/issue/AKE-4(\?|$)#', $u) === 1) {
+				return $this->response(200, ['fields' => ['priority' => ['id' => '4', 'name' => 'Low']]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->jira->getEditMeta($this->connection, ['key' => 'AKE-4']);
+		$byId = [];
+		foreach ($meta['fields'] as $f) {
+			$byId[$f['id']] = $f;
+		}
+		$this->assertArrayHasKey('priority', $byId);
+		$this->assertArrayNotHasKey('summary', $byId);
+		$this->assertSame('4', $byId['priority']['value']);
+	}
 }

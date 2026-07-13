@@ -317,4 +317,101 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame(2, $body['issue']['tracker_id']);
 		$this->assertSame('#88', $issue->displayId);
 	}
+
+	public function testGetCreateMetaDescribesProjectFields(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/custom_fields.json')) {
+				return $this->response(403, ['error' => 'forbidden']); // non-admin
+			}
+			if (str_contains($u, '/issue_priorities.json')) {
+				return $this->response(200, ['issue_priorities' => [['id' => 4, 'name' => 'Should have']]]);
+			}
+			if (str_contains($u, '/issue_categories.json')) {
+				return $this->response(200, ['issue_categories' => [['id' => 9, 'name' => 'Backend']]]);
+			}
+			if (str_contains($u, '/versions.json')) {
+				return $this->response(200, ['versions' => [
+					['id' => 100, 'name' => 'v1', 'status' => 'open'],
+					['id' => 101, 'name' => 'old', 'status' => 'closed'],
+				]]);
+			}
+			if (str_contains($u, '/projects/27.json')) {
+				return $this->response(200, ['project' => ['id' => 27, 'issue_custom_fields' => [['id' => 4, 'name' => 'TYPO3 Version']]]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->client->getCreateMeta($this->connection, null, '27', '1');
+		$byId = [];
+		foreach ($meta['fields'] as $f) {
+			$byId[$f['id']] = $f;
+		}
+		$this->assertSame('select', $byId['priority_id']['type']);
+		$this->assertSame([['id' => '4', 'name' => 'Should have']], $byId['priority_id']['options']);
+		// Closed versions are filtered out.
+		$this->assertSame([['id' => '100', 'name' => 'v1']], $byId['fixed_version_id']['options']);
+		$this->assertSame('date', $byId['due_date']['type']);
+		$this->assertSame('bool', $byId['is_private']['type']);
+		// Non-admin custom field degrades to a free-text descriptor.
+		$this->assertSame('text', $byId['cf_4']['type']);
+		$this->assertSame('TYPO3 Version', $byId['cf_4']['name']);
+	}
+
+	public function testCreateIssueEncodesDynamicFields(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issues.json')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['issue' => ['id' => 7, 'subject' => 'T', 'project' => ['name' => 'P']]]);
+			}
+			return $this->response(200, []);
+		});
+		$this->client->createIssue($this->connection, [
+			'project' => '27', 'type' => '1', 'title' => 'T', 'description' => 'D',
+			'fields' => [
+				'priority_id' => '4', 'due_date' => '2026-08-01', 'done_ratio' => '50',
+				'estimated_hours' => '2.5', 'is_private' => true, 'cf_4' => '15',
+			],
+		]);
+		$issue = $captured['issue'];
+		$this->assertSame(4, $issue['priority_id']);
+		$this->assertSame('2026-08-01', $issue['due_date']);
+		$this->assertSame(50, $issue['done_ratio']);
+		$this->assertSame(2.5, $issue['estimated_hours']);
+		$this->assertTrue($issue['is_private']);
+		$this->assertSame([['id' => 4, 'value' => '15']], $issue['custom_fields']);
+	}
+
+	public function testGetEditMetaCarriesCurrentFieldValues(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/issue_statuses.json')) {
+				return $this->response(200, ['issue_statuses' => [['id' => 1, 'name' => 'New']]]);
+			}
+			if (preg_match('#/issues/55\.json#', $u) === 1) {
+				return $this->response(200, ['issue' => [
+					'id' => 55, 'project' => ['id' => 27], 'tracker' => ['id' => 1],
+					'priority' => ['id' => 4, 'name' => 'Should have'],
+					'due_date' => '2026-08-01',
+					'custom_fields' => [['id' => 4, 'name' => 'TYPO3 Version', 'value' => '15']],
+				]]);
+			}
+			if (str_contains($u, '/memberships.json')) {
+				return $this->response(200, ['memberships' => [['user' => ['id' => 2, 'name' => 'Alice']]]]);
+			}
+			if (str_contains($u, '/custom_fields.json')) {
+				return $this->response(403, ['error' => 'forbidden']);
+			}
+			if (str_contains($u, '/issue_priorities.json')) {
+				return $this->response(200, ['issue_priorities' => [['id' => 4, 'name' => 'Should have']]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->client->getEditMeta($this->connection, ['id' => '55']);
+		$byId = [];
+		foreach ($meta['fields'] as $f) {
+			$byId[$f['id']] = $f;
+		}
+		$this->assertSame('4', $byId['priority_id']['value']);
+		$this->assertSame('2026-08-01', $byId['due_date']['value']);
+		$this->assertSame('15', $byId['cf_4']['value']);
+	}
 }

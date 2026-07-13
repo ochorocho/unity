@@ -30,6 +30,11 @@
 					:input-label="t('unity', 'Labels')"
 					:placeholder="meta.capabilities.labelsFreeText ? t('unity', 'Search or type to add labels') : t('unity', 'Search labels')" />
 			</div>
+			<DynamicField v-for="f in fields"
+				:key="f.id"
+				:descriptor="f"
+				:model-value="fieldValues[f.id]"
+				@update:model-value="setFieldValue(f.id, $event)" />
 		</template>
 		<NcLoadingIcon v-else-if="loadingMeta" :size="20" />
 
@@ -52,10 +57,11 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import MarkupEditor from './MarkupEditor.vue'
+import DynamicField from './DynamicField.vue'
 
 export default {
 	name: 'IssueEdit',
-	components: { NcTextField, NcButton, NcLoadingIcon, NcSelect, MarkupEditor },
+	components: { NcTextField, NcButton, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField },
 	props: {
 		issue: { type: Object, required: true },
 	},
@@ -72,6 +78,10 @@ export default {
 			meta: null,
 			loadingMeta: false,
 			saving: false,
+			// Provider-native dynamic fields, their live values, and the originals for diffing.
+			fields: [],
+			fieldValues: {},
+			fieldsOriginal: {},
 		}
 	},
 	computed: {
@@ -99,6 +109,22 @@ export default {
 			}
 		},
 		preselect() {
+			// Seed dynamic fields from the current value each edit-meta descriptor carries.
+			this.fields = Array.isArray(this.meta.fields) ? this.meta.fields : []
+			const values = {}
+			for (const f of this.fields) {
+				if (f.value !== undefined && f.value !== null) {
+					values[f.id] = f.value
+				} else if (f.type === 'multiselect') {
+					values[f.id] = []
+				} else if (f.type === 'bool') {
+					values[f.id] = false
+				} else {
+					values[f.id] = ''
+				}
+			}
+			this.fieldValues = values
+			this.fieldsOriginal = JSON.parse(JSON.stringify(values))
 			// Preselect current values by matching names → provider ids where possible.
 			const byName = (list, name) => (list.find((x) => x.name === name) || {}).id || ''
 			// GitLab/GitHub carry native status ids (opened/closed/open); match directly first.
@@ -128,6 +154,17 @@ export default {
 				if (this.meta && this.meta.capabilities.labels) {
 					payload.labels = this.form.labels
 				}
+				// Only send dynamic fields whose value actually changed.
+				const changedFields = {}
+				for (const f of this.fields) {
+					const current = this.fieldValues[f.id]
+					if (JSON.stringify(current) !== JSON.stringify(this.fieldsOriginal[f.id])) {
+						changedFields[f.id] = current
+					}
+				}
+				if (Object.keys(changedFields).length > 0) {
+					payload.fields = changedFields
+				}
 				const ref = encodeURIComponent(this.issue.ref)
 				const { data } = await axios.put(generateUrl('/apps/unity/issues/{ref}', { ref }), payload)
 				if (data && !data.error) {
@@ -140,6 +177,9 @@ export default {
 			} finally {
 				this.saving = false
 			}
+		},
+		setFieldValue(id, value) {
+			this.fieldValues = { ...this.fieldValues, [id]: value }
 		},
 	},
 }

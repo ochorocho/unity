@@ -61,6 +61,13 @@
 							:tracker="selectedTracker"
 							:rows="6" />
 					</div>
+
+					<NcLoadingIcon v-if="fieldsLoading" :size="20" />
+					<DynamicField v-for="f in fields"
+						:key="f.id"
+						:descriptor="f"
+						:model-value="fieldValues[f.id]"
+						@update:model-value="setFieldValue(f.id, $event)" />
 				</template>
 			</template>
 
@@ -86,11 +93,20 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import MarkupEditor from './MarkupEditor.vue'
+import DynamicField from './DynamicField.vue'
 import { trackerById, createBodyFormat } from '../trackers.js'
+
+// A dynamic-field value counts as empty when unset, blank, or an empty multi-select.
+function isEmptyValue(value) {
+	if (Array.isArray(value)) {
+		return value.length === 0
+	}
+	return value === undefined || value === null || value === ''
+}
 
 export default {
 	name: 'IssueCreate',
-	components: { NcDialog, NcButton, NcTextField, NcLoadingIcon, NcNoteCard, NcSelect, MarkupEditor },
+	components: { NcDialog, NcButton, NcTextField, NcLoadingIcon, NcNoteCard, NcSelect, MarkupEditor, DynamicField },
 	props: {
 		connections: { type: Array, default: () => [] },
 		// The connection to preselect ('' = "All connections" → user must pick).
@@ -113,6 +129,11 @@ export default {
 			title: '',
 			description: '',
 			saving: false,
+			// Provider-native dynamic fields for the chosen project/type, and their values.
+			fields: [],
+			fieldValues: {},
+			fieldsLoading: false,
+			fieldsToken: 0,
 		}
 	},
 	computed: {
@@ -150,13 +171,27 @@ export default {
 			if (this.meta && this.meta.capabilities.typeRequired && this.currentTypes.length && this.typeId === '') {
 				return false
 			}
+			// Every required dynamic field must have a value.
+			for (const f of this.fields) {
+				if (f.required && isEmptyValue(this.fieldValues[f.id])) {
+					return false
+				}
+			}
 			return true
+		},
+		// Identifies the project/type combination the dynamic fields belong to.
+		fieldContext() {
+			return `${this.connectionId}|${this.projectId}|${this.typeId}`
 		},
 	},
 	watch: {
 		// Types are project-specific; clear a stale selection when the project changes.
 		projectSelection() {
 			this.typeId = ''
+		},
+		// Re-fetch the dynamic field descriptors whenever the project/type changes.
+		fieldContext() {
+			this.loadFields()
 		},
 	},
 	mounted() {
@@ -175,7 +210,57 @@ export default {
 			this.projectSelection = null
 			this.projectOptions = []
 			this.typeId = ''
+			this.fields = []
+			this.fieldValues = {}
 			this.loadMeta()
+		},
+		// Fetch the provider-native field descriptors for the current project/type.
+		// A monotonic token guards against a stale in-flight response overwriting a newer one.
+		async loadFields() {
+			if (!this.connectionId || !this.projectId) {
+				this.fields = []
+				this.fieldValues = {}
+				return
+			}
+			const token = ++this.fieldsToken
+			this.fieldsLoading = true
+			try {
+				const { data } = await axios.get(generateUrl('/apps/unity/create-meta'), {
+					params: { connection: this.connectionId, project: this.projectId, type: this.typeId },
+				})
+				if (token !== this.fieldsToken) {
+					return
+				}
+				this.fields = data && Array.isArray(data.fields) ? data.fields : []
+				this.seedFieldValues()
+			} catch (e) {
+				if (token === this.fieldsToken) {
+					this.fields = []
+					this.fieldValues = {}
+				}
+			} finally {
+				if (token === this.fieldsToken) {
+					this.fieldsLoading = false
+				}
+			}
+		},
+		seedFieldValues() {
+			const values = {}
+			for (const f of this.fields) {
+				if (f.default !== undefined) {
+					values[f.id] = f.default
+				} else if (f.type === 'multiselect') {
+					values[f.id] = []
+				} else if (f.type === 'bool') {
+					values[f.id] = false
+				} else {
+					values[f.id] = ''
+				}
+			}
+			this.fieldValues = values
+		},
+		setFieldValue(id, value) {
+			this.fieldValues = { ...this.fieldValues, [id]: value }
 		},
 		async loadMeta() {
 			if (!this.connectionId) {
@@ -244,6 +329,7 @@ export default {
 					type: this.typeId,
 					title: this.title,
 					description: this.description,
+					fields: this.fieldValues,
 				})
 				if (data && data.ref) {
 					showSuccess(this.t('unity', 'Issue created'))

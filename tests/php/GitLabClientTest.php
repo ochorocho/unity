@@ -293,6 +293,44 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame('app', $captured['options']['query']['search']);
 	}
 
+	public function testGetCreateMetaDescribesProjectFields(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/milestones')) {
+				return $this->response(200, [['id' => 12, 'title' => 'Sprint 1']]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->client->getCreateMeta($this->connection, null, '42', null);
+		$byId = [];
+		foreach ($meta['fields'] as $f) {
+			$byId[$f['id']] = $f;
+		}
+		$this->assertSame('select', $byId['milestone_id']['type']);
+		$this->assertSame([['id' => '12', 'name' => 'Sprint 1']], $byId['milestone_id']['options']);
+		$this->assertSame('date', $byId['due_date']['type']);
+		$this->assertSame('int', $byId['weight']['type']);
+		$this->assertSame('bool', $byId['confidential']['type']);
+	}
+
+	public function testCreateIssueEncodesDynamicFields(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issues')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['id' => 1, 'iid' => 9, 'project_id' => 42, 'title' => 'New', 'references' => ['full' => 'g/a#9'], 'web_url' => 'u']);
+			}
+			return $this->response(200, []);
+		});
+		$this->client->createIssue($this->connection, [
+			'project' => '42', 'title' => 'New',
+			'fields' => ['milestone_id' => '12', 'weight' => '3', 'due_date' => '2026-08-01', 'confidential' => true],
+		]);
+		$this->assertSame(12, $captured['milestone_id']);
+		$this->assertSame(3, $captured['weight']);
+		$this->assertSame('2026-08-01', $captured['due_date']);
+		$this->assertTrue($captured['confidential']);
+	}
+
 	public function testCreateIssuePostsTitleAndDescription(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

@@ -208,6 +208,9 @@ class GitLabClient extends AbstractTrackerClient {
 		if (array_key_exists('labels', $changes) && is_array($changes['labels'])) {
 			$body['labels'] = implode(',', array_map('strval', $changes['labels']));
 		}
+		if (isset($changes['fields']) && is_array($changes['fields'])) {
+			$this->applyFields($body, $changes['fields']);
+		}
 		$data = $this->json(
 			$this->request('PUT', $this->issueUrl($connection, $refParts), [
 				'headers' => $this->defaultHeaders($connection),
@@ -222,7 +225,15 @@ class GitLabClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
+		// A project context asks only for that project's field descriptors.
+		if ($project !== null && $project !== '') {
+			return [
+				'projects' => [],
+				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'fields' => $this->describeFields($connection, $project),
+			];
+		}
 		$params = [
 			'membership' => 'true',
 			'simple' => 'true',
@@ -253,7 +264,7 @@ class GitLabClient extends AbstractTrackerClient {
 				];
 			}
 		}
-		return ['projects' => $projects, 'capabilities' => ['type' => false, 'typeRequired' => false]];
+		return ['projects' => $projects, 'capabilities' => ['type' => false, 'typeRequired' => false], 'fields' => []];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {
@@ -261,13 +272,15 @@ class GitLabClient extends AbstractTrackerClient {
 		if ($projectId === '') {
 			throw new TrackerException('A project is required');
 		}
+		$body = [
+			'title' => (string)$target['title'],
+			'description' => (string)($target['description'] ?? ''),
+		];
+		$this->applyFields($body, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/projects/' . rawurlencode($projectId) . '/issues', [
 				'headers' => $this->defaultHeaders($connection),
-				'body' => json_encode([
-					'title' => (string)$target['title'],
-					'description' => (string)($target['description'] ?? ''),
-				]),
+				'body' => json_encode($body),
 			], $connection),
 			'Create issue',
 		);
@@ -308,12 +321,121 @@ class GitLabClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		$fields = [];
+		try {
+			$projectId = (string)($refParts['project'] ?? '');
+			$current = [];
+			$issue = $this->json(
+				$this->request('GET', $this->issueUrl($connection, $refParts), ['headers' => $this->defaultHeaders($connection)], $connection),
+				'Issue',
+			);
+			$fields = $this->describeFields($connection, $projectId, $this->currentFieldValues($issue));
+		} catch (TrackerException $e) {
+		}
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => true, 'labels' => true, 'labelsFreeText' => false],
 			'statuses' => [['id' => 'opened', 'name' => 'Open'], ['id' => 'closed', 'name' => 'Closed']],
 			'assignees' => $assignees,
 			'labels' => $labels,
+			'fields' => $fields,
 		];
+	}
+
+	// ---- Dynamic fields ----------------------------------------------------
+
+	/**
+	 * @param array<string, mixed> $current
+	 * @return list<array<string, mixed>>
+	 */
+	private function describeFields(Connection $connection, string $projectId, array $current = []): array {
+		$fields = [];
+		$add = function (string $id, string $name, string $type, array $extra = []) use (&$fields, $current): void {
+			if (array_key_exists($id, $current)) {
+				$extra['value'] = $current[$id];
+			}
+			$fields[] = $this->field($id, $name, $type, $extra);
+		};
+		$milestones = $this->milestoneOptions($connection, $projectId);
+		if ($milestones !== []) {
+			$add('milestone_id', 'Milestone', 'select', ['options' => $milestones]);
+		}
+		$add('due_date', 'Due date', 'date');
+		$add('weight', 'Weight', 'int');
+		$add('confidential', 'Confidential', 'bool');
+		return $fields;
+	}
+
+	/**
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function milestoneOptions(Connection $connection, string $projectId): array {
+		if ($projectId === '') {
+			return [];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/projects/' . rawurlencode($projectId) . '/milestones', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['state' => 'active', 'per_page' => '100'],
+				], $connection),
+				'Milestones',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data as $m) {
+			if (is_array($m) && isset($m['id'])) {
+				$out[] = ['id' => (string)$m['id'], 'name' => (string)($m['title'] ?? $m['id'])];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param array<string, mixed> $body issue payload (mutated)
+	 * @param array<string, mixed> $fields
+	 */
+	private function applyFields(array &$body, array $fields): void {
+		foreach ($fields as $id => $value) {
+			switch ($id) {
+				case 'milestone_id':
+				case 'weight':
+					if ($value !== '' && $value !== null) {
+						$body[$id] = (int)$value;
+					}
+					break;
+				case 'due_date':
+					if ($value !== '' && $value !== null) {
+						$body['due_date'] = substr((string)$value, 0, 10);
+					}
+					break;
+				case 'confidential':
+					$body['confidential'] = (bool)$value;
+					break;
+			}
+		}
+	}
+
+	/**
+	 * @param array<string, mixed> $issue
+	 * @return array<string, mixed>
+	 */
+	private function currentFieldValues(array $issue): array {
+		$current = [];
+		if (isset($issue['milestone']['id'])) {
+			$current['milestone_id'] = (string)$issue['milestone']['id'];
+		}
+		if (isset($issue['due_date']) && is_string($issue['due_date'])) {
+			$current['due_date'] = $issue['due_date'];
+		}
+		if (isset($issue['weight'])) {
+			$current['weight'] = (string)$issue['weight'];
+		}
+		if (isset($issue['confidential'])) {
+			$current['confidential'] = (bool)$issue['confidential'];
+		}
+		return $current;
 	}
 
 	protected function fileHeaders(Connection $connection): array {

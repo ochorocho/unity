@@ -398,6 +398,10 @@ class JiraClient extends AbstractTrackerClient {
 		if (array_key_exists('labels', $changes) && is_array($changes['labels'])) {
 			$fields['labels'] = array_values(array_map('strval', $changes['labels']));
 		}
+		if (isset($changes['fields']) && is_array($changes['fields']) && $changes['fields'] !== []) {
+			$schemas = $this->fieldSchemas(array_values($this->editMetaFields($connection, $key)));
+			$this->applyFields($fields, $changes['fields'], $schemas, $server);
+		}
 		if ($fields !== []) {
 			$this->json(
 				$this->request('PUT', $this->apiRoot($connection) . '/issue/' . rawurlencode($key), [
@@ -423,7 +427,15 @@ class JiraClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
+		// A project+type context asks only for that combination's field descriptors.
+		if ($project !== null && $project !== '') {
+			return [
+				'projects' => [],
+				'capabilities' => ['type' => true, 'typeRequired' => true],
+				'fields' => $this->describeFields($this->createMetaFields($connection, $project, (string)$type)),
+			];
+		}
 		$projects = [];
 		try {
 			$data = $this->json(
@@ -462,7 +474,7 @@ class JiraClient extends AbstractTrackerClient {
 			}
 		}
 		// createmeta / project lists aren't text-searchable, so narrow them here.
-		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => true, 'typeRequired' => true]];
+		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => true, 'typeRequired' => true], 'fields' => []];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {
@@ -485,6 +497,11 @@ class JiraClient extends AbstractTrackerClient {
 		$description = (string)($target['description'] ?? '');
 		if ($description !== '') {
 			$fields['description'] = $this->encodeBody($connection, $description);
+		}
+		$dynamic = is_array($target['fields'] ?? null) ? $target['fields'] : [];
+		if ($dynamic !== []) {
+			$schemas = $this->fieldSchemas($this->createMetaFields($connection, $projectKey, $typeId));
+			$this->applyFields($fields, $dynamic, $schemas, $this->isServer($connection));
 		}
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/issue', [
@@ -558,12 +575,285 @@ class JiraClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		$fields = [];
+		try {
+			$editable = $this->editMetaFields($connection, $key);
+			$current = $this->currentFieldValues($connection, $key, array_keys($editable));
+			$fields = $this->describeFields(array_values($editable), $current);
+		} catch (TrackerException $e) {
+		}
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => true, 'labelsFreeText' => true],
 			'statuses' => $statuses,
 			'assignees' => $assignees,
 			'labels' => [],
+			'fields' => $fields,
 		];
+	}
+
+	// ---- Dynamic fields ----------------------------------------------------
+
+	/** Fields with first-class widgets or that we can't render generically. */
+	private const SKIP_FIELDS = [
+		'project', 'issuetype', 'summary', 'description', 'assignee', 'reporter',
+		'labels', 'attachment', 'issuelinks', 'timetracking', 'worklog', 'comment',
+		'status', 'resolution', 'parent', 'subtasks', 'security', 'watches',
+	];
+
+	/**
+	 * Field metadata for a project + issue type via the granular create-meta endpoint.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	private function createMetaFields(Connection $connection, string $projectKey, string $typeId): array {
+		if ($projectKey === '' || $typeId === '') {
+			return [];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/createmeta/' . rawurlencode($projectKey) . '/issuetypes/' . rawurlencode($typeId), [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['maxResults' => '200'],
+				], $connection),
+				'Create meta fields',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['fields'] ?? [] as $f) {
+			if (is_array($f)) {
+				$out[] = $f;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Editable field metadata for an issue, keyed by field id (with fieldId injected).
+	 *
+	 * @return array<string, array<string, mixed>>
+	 */
+	private function editMetaFields(Connection $connection, string $key): array {
+		if ($key === '') {
+			return [];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key) . '/editmeta', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Edit meta',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['fields'] ?? [] as $id => $f) {
+			if (is_array($f)) {
+				$f['fieldId'] = (string)$id;
+				$out[(string)$id] = $f;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Build descriptors from create/edit-meta field entries, skipping first-class and
+	 * unrenderable fields. $current maps field ids to current values (edit preselect).
+	 *
+	 * @param list<array<string, mixed>> $entries
+	 * @param array<string, mixed> $current
+	 * @return list<array<string, mixed>>
+	 */
+	private function describeFields(array $entries, array $current = []): array {
+		$fields = [];
+		foreach ($entries as $entry) {
+			$id = (string)($entry['fieldId'] ?? '');
+			if ($id === '' || in_array($id, self::SKIP_FIELDS, true)) {
+				continue;
+			}
+			$schema = is_array($entry['schema'] ?? null) ? $entry['schema'] : [];
+			$options = $this->jiraOptions($entry);
+			$type = $this->jiraFieldType($schema, $options !== []);
+			if ($type === null) {
+				continue;
+			}
+			$extra = ['required' => (bool)($entry['required'] ?? false)];
+			if ($type === 'select' || $type === 'multiselect') {
+				$extra['options'] = $options;
+			}
+			if ((string)($schema['type'] ?? '') === 'datetime') {
+				$extra['help'] = 'YYYY-MM-DD';
+			}
+			if (array_key_exists($id, $current)) {
+				$extra['value'] = $current[$id];
+			}
+			$fields[] = $this->field($id, (string)($entry['name'] ?? $id), $type, $extra);
+		}
+		return $fields;
+	}
+
+	/**
+	 * @param array<string, mixed> $schema
+	 */
+	private function jiraFieldType(array $schema, bool $hasOptions): ?string {
+		$type = (string)($schema['type'] ?? '');
+		$items = (string)($schema['items'] ?? '');
+		if ($type === 'array') {
+			if (in_array($items, ['option', 'version', 'component', 'user'], true)) {
+				return $hasOptions ? 'multiselect' : null;
+			}
+			return null;
+		}
+		if (in_array($type, ['option', 'option2', 'priority', 'version', 'component', 'securitylevel', 'group', 'user'], true)) {
+			return $hasOptions ? 'select' : null;
+		}
+		return match ($type) {
+			'string' => 'text',
+			'number' => 'float',
+			'date' => 'date',
+			'datetime' => 'text',
+			default => null,
+		};
+	}
+
+	/**
+	 * @param array<string, mixed> $entry
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function jiraOptions(array $entry): array {
+		$out = [];
+		foreach ($entry['allowedValues'] ?? [] as $av) {
+			if (!is_array($av)) {
+				continue;
+			}
+			$id = (string)($av['id'] ?? '');
+			if ($id === '') {
+				continue;
+			}
+			$out[] = ['id' => $id, 'name' => (string)($av['value'] ?? $av['name'] ?? $av['label'] ?? $id)];
+		}
+		return $out;
+	}
+
+	/**
+	 * @param list<array<string, mixed>> $entries
+	 * @return array<string, array<string, mixed>>
+	 */
+	private function fieldSchemas(array $entries): array {
+		$out = [];
+		foreach ($entries as $entry) {
+			$id = (string)($entry['fieldId'] ?? '');
+			if ($id !== '' && is_array($entry['schema'] ?? null)) {
+				$out[$id] = $entry['schema'];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Fold dynamic field values into a Jira fields payload, encoding each per its schema.
+	 *
+	 * @param array<string, mixed> $fields payload (mutated)
+	 * @param array<string, mixed> $values descriptor id => value
+	 * @param array<string, array<string, mixed>> $schemas
+	 */
+	private function applyFields(array &$fields, array $values, array $schemas, bool $isServer): void {
+		foreach ($values as $id => $value) {
+			$id = (string)$id;
+			if (!isset($schemas[$id]) || $value === '' || $value === null || $value === []) {
+				continue;
+			}
+			$encoded = $this->encodeJiraValue($schemas[$id], $value, $isServer);
+			if ($encoded !== null && $encoded !== []) {
+				$fields[$id] = $encoded;
+			}
+		}
+	}
+
+	/**
+	 * @param array<string, mixed> $schema
+	 */
+	private function encodeJiraValue(array $schema, mixed $value, bool $isServer): mixed {
+		$type = (string)($schema['type'] ?? '');
+		$items = (string)($schema['items'] ?? '');
+		if ($type === 'array') {
+			$out = [];
+			foreach (is_array($value) ? $value : [$value] as $v) {
+				if ($items === 'string') {
+					$out[] = (string)$v;
+				} elseif ($items === 'user') {
+					$out[] = $isServer ? ['name' => (string)$v] : ['accountId' => (string)$v];
+				} else {
+					$out[] = ['id' => (string)$v];
+				}
+			}
+			return $out;
+		}
+		return match ($type) {
+			'number' => is_numeric($value) ? $value + 0 : null,
+			'date', 'datetime', 'string' => (string)$value,
+			'user' => $isServer ? ['name' => (string)$value] : ['accountId' => (string)$value],
+			'option', 'option2', 'priority', 'version', 'component', 'securitylevel', 'group' => ['id' => (string)$value],
+			default => $value,
+		};
+	}
+
+	/**
+	 * Current values for the given field ids, normalized to descriptor form.
+	 *
+	 * @param list<string> $fieldIds
+	 * @return array<string, mixed>
+	 */
+	private function currentFieldValues(Connection $connection, string $key, array $fieldIds): array {
+		if ($key === '' || $fieldIds === []) {
+			return [];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key), [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['fields' => implode(',', $fieldIds)],
+				], $connection),
+				'Issue fields',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$raw = is_array($data['fields'] ?? null) ? $data['fields'] : [];
+		$current = [];
+		foreach ($raw as $id => $value) {
+			if ($value !== null) {
+				$current[(string)$id] = $this->normalizeCurrentValue($value);
+			}
+		}
+		return $current;
+	}
+
+	/** Reduce a Jira field value to the id(s)/scalar our descriptors expect. */
+	private function normalizeCurrentValue(mixed $value): mixed {
+		if (!is_array($value)) {
+			return $value;
+		}
+		if (array_key_exists('id', $value)) {
+			return (string)$value['id'];
+		}
+		if (array_key_exists('accountId', $value)) {
+			return (string)$value['accountId'];
+		}
+		if (array_key_exists('name', $value) && !array_key_exists(0, $value)) {
+			return (string)$value['name'];
+		}
+		$out = [];
+		foreach ($value as $v) {
+			if (is_array($v)) {
+				$out[] = (string)($v['id'] ?? $v['accountId'] ?? $v['name'] ?? $v['value'] ?? '');
+			} else {
+				$out[] = (string)$v;
+			}
+		}
+		return $out;
 	}
 
 	public function logTime(Connection $connection, array $refParts, int $seconds, string $comment, ?string $startedAt): void {

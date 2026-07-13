@@ -74,15 +74,21 @@ interface TrackerClientInterface {
 	 * type list per target (Jira issue types, Redmine trackers). `capabilities.type`
 	 * is true when a type must be chosen.
 	 *
+	 * When $project (and, where the tracker needs it, $type) is given, the result also
+	 * carries a `fields` list describing the provider-native fields writable for that
+	 * project/type combination. Without $project the `fields` list is empty.
+	 *
 	 * @param string|null $query optional case-insensitive search term to filter projects by
-	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
+	 * @param string|null $project selected project/repo id, to resolve field descriptors for
+	 * @param string|null $type selected type id, to resolve field descriptors for
+	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}, fields: list<array<string, mixed>>}
 	 */
-	public function getCreateMeta(Connection $connection, ?string $query = null): array;
+	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array;
 
 	/**
 	 * Create a new issue and return it (normalized, with its ref).
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, fields?: array<string, mixed>} $target
 	 */
 	public function createIssue(Connection $connection, array $target): Issue;
 
@@ -121,16 +127,18 @@ interface TrackerClientInterface {
 	 * Apply changed fields to an issue and return the refreshed issue.
 	 *
 	 * @param array $refParts
-	 * @param array<string, mixed> $changes any of title|description|status|assignee|labels
+	 * @param array<string, mixed> $changes any of title|description|status|assignee|labels|fields
 	 */
 	public function updateIssue(Connection $connection, array $refParts, array $changes): Issue;
 
 	/**
 	 * Editable-field options for an issue (which fields are supported plus the
-	 * available statuses/assignees/labels).
+	 * available statuses/assignees/labels). The optional `fields` list describes
+	 * provider-native fields writable on this issue, each carrying its current
+	 * `value` for preselecting the edit form.
 	 *
 	 * @param array $refParts
-	 * @return array{capabilities: array<string, bool>, statuses: list<array{id: string, name: string}>, assignees: list<array{id: string, name: string}>, labels: list<array{id: string, name: string}>}
+	 * @return array{capabilities: array<string, bool>, statuses: list<array{id: string, name: string}>, assignees: list<array{id: string, name: string}>, labels: list<array{id: string, name: string}>, fields?: list<array<string, mixed>>}
 	 */
 	public function getEditMeta(Connection $connection, array $refParts): array;
 

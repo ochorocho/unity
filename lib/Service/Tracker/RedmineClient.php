@@ -202,6 +202,9 @@ class RedmineClient extends AbstractTrackerClient {
 			$assignee = (string)$changes['assignee'];
 			$issue['assigned_to_id'] = $assignee === '' ? '' : (int)$assignee;
 		}
+		if (isset($changes['fields']) && is_array($changes['fields'])) {
+			$this->applyFields($issue, $changes['fields']);
+		}
 		if ($issue !== []) {
 			$this->json(
 				$this->request('PUT', $this->base($connection) . '/issues/' . rawurlencode($id) . '.json', [
@@ -218,7 +221,16 @@ class RedmineClient extends AbstractTrackerClient {
 		return true;
 	}
 
-	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
+		// A project+type context asks only for that combination's field descriptors;
+		// skip the (paginated) project listing the initial call needs.
+		if ($project !== null && $project !== '') {
+			return [
+				'projects' => [],
+				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'fields' => $this->describeFields($connection, $project, $type),
+			];
+		}
 		// Redmine trackers are global (shared by all projects).
 		$types = [];
 		try {
@@ -254,7 +266,7 @@ class RedmineClient extends AbstractTrackerClient {
 			$offset += 100;
 		} while ($offset < $total && $offset < 500);
 		// Redmine's /projects.json has no name-search param, so narrow the list here.
-		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => $types !== [], 'typeRequired' => $types !== []]];
+		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => $types !== [], 'typeRequired' => $types !== []], 'fields' => []];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {
@@ -271,6 +283,7 @@ class RedmineClient extends AbstractTrackerClient {
 		if ($trackerId > 0) {
 			$issue['tracker_id'] = $trackerId;
 		}
+		$this->applyFields($issue, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->base($connection) . '/issues.json', [
 				'headers' => $this->defaultHeaders($connection),
@@ -298,6 +311,7 @@ class RedmineClient extends AbstractTrackerClient {
 		} catch (TrackerException $e) {
 		}
 		$assignees = [];
+		$fields = [];
 		try {
 			$id = (string)($refParts['id'] ?? '');
 			$issueData = $this->json(
@@ -306,7 +320,9 @@ class RedmineClient extends AbstractTrackerClient {
 				], $connection),
 				'Issue',
 			);
-			$projectId = (string)($issueData['issue']['project']['id'] ?? '');
+			$issue = is_array($issueData['issue'] ?? null) ? $issueData['issue'] : [];
+			$projectId = (string)($issue['project']['id'] ?? '');
+			$trackerId = (string)($issue['tracker']['id'] ?? '');
 			if ($projectId !== '') {
 				$memberships = $this->json(
 					$this->request('GET', $this->base($connection) . '/projects/' . rawurlencode($projectId) . '/memberships.json', [
@@ -320,6 +336,8 @@ class RedmineClient extends AbstractTrackerClient {
 						$assignees[] = ['id' => (string)($membership['user']['id'] ?? ''), 'name' => (string)($membership['user']['name'] ?? '')];
 					}
 				}
+				$inlineCustom = is_array($issue['custom_fields'] ?? null) ? $issue['custom_fields'] : [];
+				$fields = $this->describeFields($connection, $projectId, $trackerId, $this->currentFieldValues($issue), $inlineCustom);
 			}
 		} catch (TrackerException $e) {
 		}
@@ -328,7 +346,382 @@ class RedmineClient extends AbstractTrackerClient {
 			'statuses' => $statuses,
 			'assignees' => $assignees,
 			'labels' => [],
+			'fields' => $fields,
 		];
+	}
+
+	// ---- Dynamic fields ----------------------------------------------------
+
+	/**
+	 * Build field descriptors for a project (+ tracker). $current maps descriptor ids
+	 * to current values (edit preselect); $inlineCustom is the issue's inline
+	 * custom_fields, used to discover custom fields when the token lacks admin.
+	 *
+	 * @param array<string, mixed> $current
+	 * @param list<array<string, mixed>> $inlineCustom
+	 * @return list<array<string, mixed>>
+	 */
+	private function describeFields(Connection $connection, string $projectId, ?string $trackerId = null, array $current = [], array $inlineCustom = []): array {
+		if ($projectId === '') {
+			return [];
+		}
+		$fields = [];
+		$add = function (string $id, string $name, string $type, array $extra = []) use (&$fields, $current): void {
+			if (array_key_exists($id, $current)) {
+				$extra['value'] = $current[$id];
+			}
+			$fields[] = $this->field($id, $name, $type, $extra);
+		};
+
+		$priorities = $this->optionList($connection, '/enumerations/issue_priorities.json', 'issue_priorities');
+		if ($priorities !== []) {
+			$add('priority_id', 'Priority', 'select', ['options' => $priorities]);
+		}
+		$categories = $this->optionList($connection, '/projects/' . rawurlencode($projectId) . '/issue_categories.json', 'issue_categories');
+		if ($categories !== []) {
+			$add('category_id', 'Category', 'select', ['options' => $categories]);
+		}
+		$versions = $this->versionOptions($connection, $projectId);
+		if ($versions !== []) {
+			$add('fixed_version_id', 'Target version', 'select', ['options' => $versions]);
+		}
+		$add('start_date', 'Start date', 'date');
+		$add('due_date', 'Due date', 'date');
+		$add('estimated_hours', 'Estimated hours', 'float');
+		$add('done_ratio', '% Done', 'int');
+		$add('parent_issue_id', 'Parent issue', 'int');
+		$add('is_private', 'Private', 'bool');
+
+		foreach ($this->customFieldDescriptors($connection, $projectId, $trackerId, $inlineCustom) as $cf) {
+			$id = (string)$cf['id'];
+			if (array_key_exists($id, $current)) {
+				$cf['value'] = $current[$id];
+			}
+			$fields[] = $cf;
+		}
+		return $fields;
+	}
+
+	/**
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function optionList(Connection $connection, string $path, string $key): array {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . $path, ['headers' => $this->defaultHeaders($connection)], $connection),
+				$key,
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data[$key] ?? [] as $row) {
+			if (is_array($row)) {
+				$out[] = ['id' => (string)($row['id'] ?? ''), 'name' => (string)($row['name'] ?? '')];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Open project versions as options.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function versionOptions(Connection $connection, string $projectId): array {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/projects/' . rawurlencode($projectId) . '/versions.json', ['headers' => $this->defaultHeaders($connection)], $connection),
+				'Versions',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['versions'] ?? [] as $v) {
+			if (is_array($v) && (string)($v['status'] ?? 'open') === 'open') {
+				$out[] = ['id' => (string)($v['id'] ?? ''), 'name' => (string)($v['name'] ?? '')];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param list<array<string, mixed>> $inlineCustom
+	 * @return list<array<string, mixed>>
+	 */
+	private function customFieldDescriptors(Connection $connection, string $projectId, ?string $trackerId, array $inlineCustom): array {
+		// Preferred: full definitions with formats/possible_values (admin token only).
+		$defs = $this->adminCustomFields($connection);
+		if ($defs !== []) {
+			$enabled = $this->projectCustomFieldIds($connection, $projectId, $inlineCustom);
+			$out = [];
+			foreach ($defs as $cf) {
+				$cfId = (int)($cf['id'] ?? 0);
+				if ($cfId <= 0 || (string)($cf['customized_type'] ?? '') !== 'issue') {
+					continue;
+				}
+				if ($enabled !== [] && !in_array($cfId, $enabled, true)) {
+					continue;
+				}
+				if ($trackerId !== null && $trackerId !== '' && !$this->customFieldAppliesToTracker($cf, $trackerId)) {
+					continue;
+				}
+				$out[] = $this->buildCustomDescriptor($connection, $projectId, $cf);
+			}
+			return $out;
+		}
+		// Non-admin: only {id, name} is discoverable, so render each custom field as free text.
+		$known = $inlineCustom !== [] ? $inlineCustom : $this->projectCustomFields($connection, $projectId);
+		$out = [];
+		foreach ($known as $cf) {
+			$cfId = (int)($cf['id'] ?? 0);
+			if ($cfId <= 0) {
+				continue;
+			}
+			$out[] = $this->field('cf_' . $cfId, (string)($cf['name'] ?? ('Field ' . $cfId)), 'text');
+		}
+		return $out;
+	}
+
+	/**
+	 * Full custom-field definitions via /custom_fields.json; [] unless the token is admin.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	private function adminCustomFields(Connection $connection): array {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/custom_fields.json', ['headers' => $this->defaultHeaders($connection)], $connection),
+				'Custom fields',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['custom_fields'] ?? [] as $cf) {
+			if (is_array($cf)) {
+				$out[] = $cf;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * The issue custom fields enabled for a project (id + name only), via project include.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	private function projectCustomFields(Connection $connection, string $projectId): array {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/projects/' . rawurlencode($projectId) . '.json', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['include' => 'issue_custom_fields'],
+				], $connection),
+				'Project',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['project']['issue_custom_fields'] ?? [] as $cf) {
+			if (is_array($cf)) {
+				$out[] = $cf;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param list<array<string, mixed>> $inlineCustom
+	 * @return list<int>
+	 */
+	private function projectCustomFieldIds(Connection $connection, string $projectId, array $inlineCustom): array {
+		$source = $inlineCustom !== [] ? $inlineCustom : $this->projectCustomFields($connection, $projectId);
+		$ids = [];
+		foreach ($source as $cf) {
+			if ((int)($cf['id'] ?? 0) > 0) {
+				$ids[] = (int)$cf['id'];
+			}
+		}
+		return $ids;
+	}
+
+	/**
+	 * @param array<string, mixed> $cf
+	 */
+	private function customFieldAppliesToTracker(array $cf, string $trackerId): bool {
+		$trackers = $cf['trackers'] ?? null;
+		if (!is_array($trackers) || $trackers === []) {
+			return true;
+		}
+		foreach ($trackers as $tr) {
+			if (is_array($tr) && (string)($tr['id'] ?? '') === $trackerId) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @param array<string, mixed> $cf
+	 * @return array<string, mixed>
+	 */
+	private function buildCustomDescriptor(Connection $connection, string $projectId, array $cf): array {
+		$format = (string)($cf['field_format'] ?? 'string');
+		$multiple = (bool)($cf['multiple'] ?? false);
+		$type = $this->redmineFieldType($format, $multiple);
+		$extra = ['required' => (bool)($cf['is_required'] ?? false)];
+		if ($type === 'select' || $type === 'multiselect') {
+			if ($format === 'user') {
+				$extra['options'] = $this->membershipOptions($connection, $projectId);
+			} elseif ($format === 'version') {
+				$extra['options'] = $this->versionOptions($connection, $projectId);
+			} else {
+				$options = [];
+				foreach ($cf['possible_values'] ?? [] as $pv) {
+					if (is_array($pv)) {
+						$value = (string)($pv['value'] ?? '');
+						$options[] = ['id' => $value, 'name' => (string)($pv['label'] ?? $value)];
+					}
+				}
+				$extra['options'] = $options;
+			}
+		}
+		return $this->field('cf_' . (int)($cf['id'] ?? 0), (string)($cf['name'] ?? ''), $type, $extra);
+	}
+
+	/**
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function membershipOptions(Connection $connection, string $projectId): array {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/projects/' . rawurlencode($projectId) . '/memberships.json', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['limit' => '100'],
+				], $connection),
+				'Memberships',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data['memberships'] ?? [] as $m) {
+			if (is_array($m) && isset($m['user'])) {
+				$out[] = ['id' => (string)($m['user']['id'] ?? ''), 'name' => (string)($m['user']['name'] ?? '')];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Extract current standard + custom field values from an issue JSON for edit preselect.
+	 *
+	 * @param array<string, mixed> $issue
+	 * @return array<string, mixed>
+	 */
+	private function currentFieldValues(array $issue): array {
+		$current = [];
+		foreach (['priority' => 'priority_id', 'category' => 'category_id', 'fixed_version' => 'fixed_version_id'] as $src => $descId) {
+			if (isset($issue[$src]['id'])) {
+				$current[$descId] = (string)$issue[$src]['id'];
+			}
+		}
+		if (isset($issue['parent']['id'])) {
+			$current['parent_issue_id'] = (string)$issue['parent']['id'];
+		}
+		foreach (['start_date', 'due_date'] as $key) {
+			if (isset($issue[$key]) && is_string($issue[$key])) {
+				$current[$key] = $issue[$key];
+			}
+		}
+		if (isset($issue['estimated_hours'])) {
+			$current['estimated_hours'] = (string)$issue['estimated_hours'];
+		}
+		if (isset($issue['done_ratio'])) {
+			$current['done_ratio'] = (string)$issue['done_ratio'];
+		}
+		if (isset($issue['is_private'])) {
+			$current['is_private'] = (bool)$issue['is_private'];
+		}
+		foreach ($issue['custom_fields'] ?? [] as $cf) {
+			if (is_array($cf) && isset($cf['id'])) {
+				$current['cf_' . (int)$cf['id']] = $cf['value'] ?? '';
+			}
+		}
+		return $current;
+	}
+
+	/**
+	 * Fold dynamic field values into the Redmine issue payload.
+	 *
+	 * @param array<string, mixed> $issue
+	 * @param array<string, mixed> $fields
+	 */
+	private function applyFields(array &$issue, array $fields): void {
+		$custom = [];
+		foreach ($fields as $id => $value) {
+			$id = (string)$id;
+			if (str_starts_with($id, 'cf_')) {
+				$cfId = (int)substr($id, 3);
+				if ($cfId > 0) {
+					$custom[] = ['id' => $cfId, 'value' => is_array($value) ? array_map('strval', $value) : (string)$value];
+				}
+				continue;
+			}
+			switch ($id) {
+				case 'priority_id':
+				case 'category_id':
+				case 'fixed_version_id':
+				case 'parent_issue_id':
+				case 'done_ratio':
+					if ($value !== '' && $value !== null) {
+						$issue[$id] = (int)$value;
+					}
+					break;
+				case 'estimated_hours':
+					if ($value !== '' && $value !== null) {
+						$issue[$id] = (float)$value;
+					}
+					break;
+				case 'start_date':
+				case 'due_date':
+					if ($value !== '' && $value !== null) {
+						$issue[$id] = substr((string)$value, 0, 10);
+					}
+					break;
+				case 'is_private':
+					$issue[$id] = (bool)$value;
+					break;
+			}
+		}
+		if ($custom !== []) {
+			$issue['custom_fields'] = $custom;
+		}
+	}
+
+	private function redmineFieldType(string $format, bool $multiple): string {
+		switch ($format) {
+			case 'text':
+				return 'textarea';
+			case 'int':
+				return 'int';
+			case 'float':
+				return 'float';
+			case 'date':
+				return 'date';
+			case 'bool':
+				return 'bool';
+			case 'list':
+			case 'enumeration':
+			case 'user':
+			case 'version':
+				return $multiple ? 'multiselect' : 'select';
+			default:
+				return 'text';
+		}
 	}
 
 	public function getTimeRecords(Connection $connection, array $refParts): array {

@@ -203,6 +203,37 @@ class GithubClientTest extends TestCase {
 		$this->assertSame('ochorocho/shippy', $meta['projects'][0]['id']);
 	}
 
+	public function testGetCreateMetaDescribesMilestoneField(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/milestones')) {
+				return $this->response(200, [['number' => 3, 'title' => 'v1.0'], ['number' => 4, 'title' => 'v2.0']]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->client->getCreateMeta($this->connection, null, 'octocat/Hello-World', null);
+		$this->assertCount(1, $meta['fields']);
+		$this->assertSame('milestone', $meta['fields'][0]['id']);
+		$this->assertSame('select', $meta['fields'][0]['type']);
+		$this->assertSame([['id' => '3', 'name' => 'v1.0'], ['id' => '4', 'name' => 'v2.0']], $meta['fields'][0]['options']);
+	}
+
+	public function testCreateIssueEncodesMilestone(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issues')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, [
+					'number' => 5, 'title' => 'T',
+					'repository_url' => 'https://api.github.com/repos/octocat/Hello-World',
+					'html_url' => 'https://github.com/octocat/Hello-World/issues/5',
+				]);
+			}
+			return $this->response(200, []);
+		});
+		$this->client->createIssue($this->connection, ['project' => 'octocat/Hello-World', 'title' => 'T', 'fields' => ['milestone' => '3']]);
+		$this->assertSame(3, $captured['milestone']);
+	}
+
 	public function testCreateIssuePostsToRepo(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

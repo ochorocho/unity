@@ -49,10 +49,27 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	/**
 	 * Default: no create metadata. Overridden by trackers that support creation.
 	 *
-	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
+	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}, fields: list<array<string, mixed>>}
 	 */
-	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
 		throw new TrackerException('Creating issues is not supported for this tracker');
+	}
+
+	/**
+	 * Build a normalized field descriptor for the dynamic-field channel. `$extra` may
+	 * carry `required`, `options`, `default`, `value`, `group`, `help`, `multiple`.
+	 *
+	 * @param 'text'|'textarea'|'int'|'float'|'date'|'bool'|'select'|'multiselect' $type
+	 * @param array<string, mixed> $extra
+	 * @return array<string, mixed>
+	 */
+	protected function field(string $id, string $name, string $type, array $extra = []): array {
+		return array_merge([
+			'id' => $id,
+			'name' => $name,
+			'type' => $type,
+			'required' => false,
+		], $extra);
 	}
 
 	/**
@@ -77,7 +94,7 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	/**
 	 * Default: creating issues is unsupported. Trackers with a create API override.
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, fields?: array<string, mixed>} $target
 	 */
 	public function createIssue(Connection $connection, array $target): \OCA\Unity\Model\Issue {
 		throw new TrackerException('Creating issues is not supported for this tracker');

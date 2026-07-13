@@ -63,17 +63,26 @@ class IssueController extends Controller {
 	}
 
 	#[NoAdminRequired]
-	public function createMeta(string $connection, string $query = ''): DataResponse {
+	public function createMeta(string $connection, string $query = '', string $project = '', string $type = ''): DataResponse {
 		try {
 			$search = trim($query) === '' ? null : trim($query);
-			return new DataResponse($this->issueService->getCreateMeta($this->userId ?? '', $connection, $search));
+			return new DataResponse($this->issueService->getCreateMeta(
+				$this->userId ?? '',
+				$connection,
+				$search,
+				$project === '' ? null : $project,
+				$type === '' ? null : $type,
+			));
 		} catch (TrackerException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}
 	}
 
+	/**
+	 * @param array<string, mixed> $fields provider-native field values keyed by descriptor id
+	 */
 	#[NoAdminRequired]
-	public function create(string $connection, string $project, string $title, string $description = '', string $type = ''): DataResponse {
+	public function create(string $connection, string $project, string $title, string $description = '', string $type = '', array $fields = []): DataResponse {
 		if (trim($title) === '') {
 			return new DataResponse(['error' => 'A title is required'], Http::STATUS_BAD_REQUEST);
 		}
@@ -86,6 +95,7 @@ class IssueController extends Controller {
 				'type' => $type,
 				'title' => $title,
 				'description' => $description,
+				'fields' => $fields,
 			]);
 			return new DataResponse($issue, Http::STATUS_CREATED);
 		} catch (TrackerException $e) {
@@ -185,6 +195,7 @@ class IssueController extends Controller {
 
 	/**
 	 * @param string[]|null $labels
+	 * @param array<string, mixed>|null $fields provider-native field values keyed by descriptor id
 	 */
 	#[NoAdminRequired]
 	public function update(
@@ -194,6 +205,7 @@ class IssueController extends Controller {
 		?string $status = null,
 		?string $assignee = null,
 		?array $labels = null,
+		?array $fields = null,
 	): DataResponse {
 		$changes = [];
 		if ($title !== null) {
@@ -210,6 +222,9 @@ class IssueController extends Controller {
 		}
 		if ($labels !== null) {
 			$changes['labels'] = $labels;
+		}
+		if ($fields !== null && $fields !== []) {
+			$changes['fields'] = $fields;
 		}
 		if ($changes === []) {
 			return new DataResponse(['error' => 'No changes'], Http::STATUS_BAD_REQUEST);

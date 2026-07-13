@@ -98,21 +98,23 @@ class IssueService {
 	 * Projects/types the user can create an issue in for a connection.
 	 *
 	 * @param string|null $query optional case-insensitive project search term
-	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}}
+	 * @param string|null $project selected project/repo id, to resolve field descriptors for
+	 * @param string|null $type selected type id, to resolve field descriptors for
+	 * @return array{projects: list<array{id: string, name: string, types: list<array{id: string, name: string}>}>, capabilities: array{type: bool, typeRequired: bool}, fields: list<array<string, mixed>>}
 	 * @throws TrackerException
 	 */
-	public function getCreateMeta(string $userId, string $connectionId, ?string $query = null): array {
+	public function getCreateMeta(string $userId, string $connectionId, ?string $query = null, ?string $project = null, ?string $type = null): array {
 		[$client, $connection] = $this->resolveConnection($userId, $connectionId);
 		if (!$client->supportsCreate()) {
 			throw new TrackerException('Creating issues is not supported for this tracker');
 		}
-		return $client->getCreateMeta($connection, $query);
+		return $client->getCreateMeta($connection, $query, $project, $type);
 	}
 
 	/**
 	 * Create a new issue on a connection and return it.
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, fields?: array<string, mixed>} $target
 	 * @throws TrackerException
 	 */
 	public function createIssue(string $userId, string $connectionId, array $target): Issue {

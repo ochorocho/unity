@@ -194,6 +194,9 @@ class GithubClient extends AbstractTrackerClient {
 		if (array_key_exists('labels', $changes) && is_array($changes['labels'])) {
 			$body['labels'] = array_values(array_map('strval', $changes['labels']));
 		}
+		if (isset($changes['fields']) && is_array($changes['fields'])) {
+			$this->applyFields($body, $changes['fields']);
+		}
 		$data = $this->json(
 			$this->request('PATCH', $this->issueUrl($connection, $refParts), [
 				'headers' => $this->defaultHeaders($connection),
@@ -211,7 +214,16 @@ class GithubClient extends AbstractTrackerClient {
 	/** Hard cap on /user/repos pages walked during a search (100 repos each). */
 	private const REPO_SEARCH_MAX_PAGES = 10;
 
-	public function getCreateMeta(Connection $connection, ?string $query = null): array {
+	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
+		// A repository context asks only for that repo's field descriptors.
+		if ($project !== null && str_contains($project, '/')) {
+			[$owner, $repo] = explode('/', $project, 2);
+			return [
+				'projects' => [],
+				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'fields' => $this->describeFields($connection, $owner, $repo),
+			];
+		}
 		$hasQuery = $query !== null && trim($query) !== '';
 		// /user/repos returns the 100 most-recently-updated repos per page and has no
 		// text-search param. Without a term the first page is plenty for the dropdown;
@@ -248,7 +260,7 @@ class GithubClient extends AbstractTrackerClient {
 			$pagesWalked++;
 			$page = $this->nextPageFromLink($response->getHeader('Link')) ?? '';
 		} while ($page !== '' && $pagesWalked < $maxPages);
-		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => false, 'typeRequired' => false]];
+		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => false, 'typeRequired' => false], 'fields' => []];
 	}
 
 	public function createIssue(Connection $connection, array $target): Issue {
@@ -257,13 +269,15 @@ class GithubClient extends AbstractTrackerClient {
 			throw new TrackerException('A repository is required');
 		}
 		[$owner, $repo] = explode('/', $full, 2);
+		$body = [
+			'title' => (string)$target['title'],
+			'body' => (string)($target['description'] ?? ''),
+		];
+		$this->applyFields($body, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/issues', [
 				'headers' => $this->defaultHeaders($connection),
-				'body' => json_encode([
-					'title' => (string)$target['title'],
-					'body' => (string)($target['description'] ?? ''),
-				]),
+				'body' => json_encode($body),
 			], $connection),
 			'Create issue',
 		);
@@ -306,12 +320,86 @@ class GithubClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		$fields = [];
+		try {
+			$owner = (string)($refParts['owner'] ?? '');
+			$repo = (string)($refParts['repo'] ?? '');
+			$current = [];
+			$issue = $this->json(
+				$this->request('GET', $this->issueUrl($connection, $refParts), ['headers' => $this->defaultHeaders($connection)], $connection),
+				'Issue',
+			);
+			if (isset($issue['milestone']['number'])) {
+				$current['milestone'] = (string)$issue['milestone']['number'];
+			}
+			$fields = $this->describeFields($connection, $owner, $repo, $current);
+		} catch (TrackerException $e) {
+		}
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => true, 'labels' => true, 'labelsFreeText' => false],
 			'statuses' => [['id' => 'open', 'name' => 'Open'], ['id' => 'closed', 'name' => 'Closed']],
 			'assignees' => $assignees,
 			'labels' => $labels,
+			'fields' => $fields,
 		];
+	}
+
+	// ---- Dynamic fields ----------------------------------------------------
+
+	/**
+	 * @param array<string, mixed> $current
+	 * @return list<array<string, mixed>>
+	 */
+	private function describeFields(Connection $connection, string $owner, string $repo, array $current = []): array {
+		$milestones = $this->milestoneOptions($connection, $owner, $repo);
+		if ($milestones === []) {
+			return [];
+		}
+		$extra = ['options' => $milestones];
+		if (array_key_exists('milestone', $current)) {
+			$extra['value'] = $current['milestone'];
+		}
+		return [$this->field('milestone', 'Milestone', 'select', $extra)];
+	}
+
+	/**
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function milestoneOptions(Connection $connection, string $owner, string $repo): array {
+		if ($owner === '' || $repo === '') {
+			return [];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/milestones', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['state' => 'open', 'per_page' => '100'],
+				], $connection),
+				'Milestones',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($data as $m) {
+			if (is_array($m) && isset($m['number'])) {
+				$out[] = ['id' => (string)$m['number'], 'name' => (string)($m['title'] ?? $m['number'])];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param array<string, mixed> $body issue payload (mutated)
+	 * @param array<string, mixed> $fields
+	 */
+	private function applyFields(array &$body, array $fields): void {
+		if (array_key_exists('milestone', $fields)) {
+			$value = $fields['milestone'];
+			if ($value !== '' && $value !== null) {
+				$body['milestone'] = (int)$value;
+			}
+		}
 	}
 
 	protected function fileHeaders(Connection $connection): array {
