@@ -236,7 +236,7 @@ export default {
 				await axios.put(generateUrl('/apps/unity/issues/{ref}', { ref }), { description: newText })
 				this.$emit('updated')
 			} catch (e) {
-				showError(this.t('unity', 'Could not update the description'))
+				showError(e?.response?.data?.error || this.t('unity', 'Could not update the description'))
 			}
 		},
 	},

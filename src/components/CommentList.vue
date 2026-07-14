@@ -129,7 +129,7 @@ export default {
 				// HTML) is refreshed from the tracker.
 				this.$emit('updated')
 			} catch (e) {
-				showError(this.t('unity', 'Could not update the comment'))
+				showError(e?.response?.data?.error || this.t('unity', 'Could not update the comment'))
 			} finally {
 				this.saving = false
 			}
@@ -170,7 +170,7 @@ export default {
 				)
 				this.$emit('updated')
 			} catch (e) {
-				showError(this.t('unity', 'Could not update the comment'))
+				showError(e?.response?.data?.error || this.t('unity', 'Could not update the comment'))
 			}
 		},
 	},

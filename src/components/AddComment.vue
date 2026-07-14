@@ -57,7 +57,7 @@ export default {
 					showError(data.error || this.t('unity', 'Could not add comment'))
 				}
 			} catch (e) {
-				showError(this.t('unity', 'Could not add comment'))
+				showError(e?.response?.data?.error || this.t('unity', 'Could not add comment'))
 			} finally {
 				this.submitting = false
 			}

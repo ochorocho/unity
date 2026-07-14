@@ -1,6 +1,6 @@
 <template>
 	<!-- eslint-disable-next-line vue/no-v-html -->
-	<div v-if="rendered" ref="htmlRoot" class="unity-rendered unity-html" v-html="renderedSafe" @click="onRenderedTodo" />
+	<div v-if="rendered" ref="htmlRoot" class="unity-rendered unity-html" :class="{ 'unity-tasks-editable': editable }" v-html="renderedSafe" @click="onRenderedTodo" />
 	<div v-else-if="format === 'markdown'" ref="mdRoot" class="unity-rendered">
 		<NcRichText :text="markdownText"
 			:use-markdown="true"
@@ -126,18 +126,31 @@ export default {
 		// Toggle the clicked task in the server-rendered HTML by flipping the matching
 		// marker in the raw Markdown (kept in `text`) — same emit contract as the
 		// NcRichText path; the parent persists it and a silent re-fetch re-renders.
+		// A click anywhere on the task-list item (the label text, not only the box)
+		// toggles it, matching the NcRichText/Jira behaviour.
 		onRenderedTodo(e) {
 			if (!this.editable || !this.$refs.htmlRoot) {
 				return
 			}
 			const target = e.target
-			if (!target || target.tagName !== 'INPUT' || target.getAttribute('type') !== 'checkbox') {
+			if (target.closest && target.closest('a')) {
+				return // don't toggle when clicking a link inside the item
+			}
+			const item = target.closest && target.closest('.task-list-item')
+			if (!item) {
+				return
+			}
+			const box = item.querySelector('input[type="checkbox"]')
+			if (!box) {
 				return
 			}
 			const boxes = [...this.$refs.htmlRoot.querySelectorAll('input[type="checkbox"]')]
-			const index = boxes.indexOf(target)
+			const index = boxes.indexOf(box)
 			if (index === -1) {
 				return
+			}
+			if (target !== box) {
+				box.checked = !box.checked // reflect a label click immediately
 			}
 			this.$emit('update:text', toggleTaskAt(this.text, index))
 		},
@@ -193,6 +206,24 @@ export default {
 }
 .unity-rendered :deep(.task-list-item) {
 	list-style: none;
+}
+/* When the body is editable, the whole task row toggles on click — signal it and
+   mirror the NcRichText (Jira) checkbox hover affordance for the provider-rendered
+   task lists (GitLab/Asana). */
+.unity-tasks-editable :deep(.task-list-item) {
+	cursor: pointer;
+	/* Shrink to the checkbox + label so the hover highlight is inline, not full-width. */
+	width: fit-content;
+	border-radius: var(--border-radius-element);
+	padding-block: 2px;
+	padding-inline: 4px;
+	margin-inline-start: -4px;
+}
+.unity-tasks-editable :deep(.task-list-item):hover {
+	background-color: var(--color-background-hover);
+}
+.unity-tasks-editable :deep(.task-list-item):has(input:checked):hover {
+	background-color: var(--color-primary-element-light-hover);
 }
 /* Vertically center the checkbox against its label in server-rendered task lists
    (e.g. GitLab), which otherwise sit the box on the text baseline. */
