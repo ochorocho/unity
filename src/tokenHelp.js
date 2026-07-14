@@ -91,6 +91,20 @@ export function tokenHelp(tracker, baseUrl) {
 				t('unity', 'The API key inherits your account permissions, so your Redmine role needs the project permissions listed above.'),
 			],
 		}
+	case 'asana':
+		return {
+			createUrl: 'https://app.asana.com/0/my-apps',
+			createLabel: t('unity', 'Create an Asana personal access token'),
+			auth: t('unity', 'Authentication is a Bearer personal access token (PAT). The base URL is fixed to https://app.asana.com/api/1.0, so it is not needed.'),
+			scopes: [
+				{ name: t('unity', 'Default (full access)'), purpose: t('unity', 'A PAT inherits your account permissions — read tasks, post comments, manage attachments and log time in your workspaces') },
+			],
+			notes: [
+				t('unity', 'Open your Asana profile settings → Apps → "Manage Developer Apps" → Personal access tokens → Create new token, then paste it into the API token field.'),
+				t('unity', 'If your token can see more than one workspace, set the optional Workspace (GID) to pin the one Unity should use; otherwise the first workspace is used.'),
+				t('unity', 'Time tracking requires a paid Asana plan (Advanced or above) and cannot store a per-entry comment.'),
+			],
+		}
 	default:
 		return null
 	}

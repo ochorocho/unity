@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 namespace OCA\Unity\Service;
 
+use OCA\Unity\Service\Tracker\AsanaClient;
 use OCA\Unity\Service\Tracker\GithubClient;
 use OCA\Unity\Service\Tracker\GitLabClient;
 use OCA\Unity\Service\Tracker\JiraClient;
@@ -28,8 +29,9 @@ class TrackerManager {
 		GitLabClient $gitlab,
 		RedmineClient $redmine,
 		GithubClient $github,
+		AsanaClient $asana,
 	) {
-		foreach ([$jira, $gitlab, $redmine, $github] as $client) {
+		foreach ([$jira, $gitlab, $redmine, $github, $asana] as $client) {
 			$this->clients[$client->getTrackerId()] = $client;
 		}
 	}

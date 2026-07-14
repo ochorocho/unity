@@ -2,7 +2,7 @@
 	<div id="unity_prefs_content" class="section">
 		<h2>{{ t('unity', 'Unity — issue tracker connections') }}</h2>
 		<p class="settings-hint">
-			{{ t('unity', 'Connect your Jira, GitLab, Redmine and GitHub accounts. Tokens are stored encrypted and never shown again.') }}
+			{{ t('unity', 'Connect your Jira, GitLab, Redmine, GitHub and Asana accounts. Tokens are stored encrypted and never shown again.') }}
 		</p>
 
 		<div class="unity-connections">

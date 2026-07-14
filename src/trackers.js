@@ -9,6 +9,7 @@ export const TRACKERS = [
 	{ id: 'gitlab', label: 'GitLab', color: '#fc6d26', timeTracking: true, attachments: false, emojiShortcodes: true, create: true },
 	{ id: 'redmine', label: 'Redmine', color: '#b32024', timeTracking: true, attachments: true, emojiShortcodes: false, create: true },
 	{ id: 'github', label: 'GitHub', color: '#24292f', timeTracking: false, attachments: false, emojiShortcodes: true, create: true },
+	{ id: 'asana', label: 'Asana', color: '#f06a6a', timeTracking: true, attachments: true, emojiShortcodes: false, create: true },
 ]
 
 export function trackerById(id) {

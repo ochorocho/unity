@@ -278,6 +278,7 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		$body = (string)$response->getBody();
 		if ($status < 200 || $status >= 300) {
 			$message = $this->extractError($body);
+			$this->logger->warning('Unity API error: ' . $context . ' failed (HTTP ' . $status . ')' . ($message !== '' ? ': ' . $message : ''));
 			throw new TrackerException($context . ' failed (HTTP ' . $status . ')' . ($message !== '' ? ': ' . $message : ''));
 		}
 		if ($body === '') {

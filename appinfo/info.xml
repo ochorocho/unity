@@ -2,8 +2,8 @@
 <info>
     <id>unity</id>
     <name>Unity</name>
-    <summary>Unified issue and ticket tracking across Jira, GitLab, Redmine and GitHub</summary>
-    <description><![CDATA[Unity brings your issues from Jira, GitLab, Redmine and GitHub into a single,
+    <summary>Unified issue and ticket tracking across Jira, GitLab, Redmine, GitHub and Asana</summary>
+    <description><![CDATA[Unity brings your issues from Jira, GitLab, Redmine, GitHub and Asana into a single,
 sortable, cached view inside Nextcloud. Search across all your trackers, read issue details and comments,
 add comments, and log time — using your own API tokens configured per user.]]></description>
     <version>0.10.9</version>

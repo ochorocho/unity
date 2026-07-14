@@ -49,7 +49,7 @@
 			<div class="unity-main">
 				<div v-if="connections.length === 0" class="unity-empty-wrap">
 					<NcEmptyContent :name="t('unity', 'No connections yet')"
-						:description="t('unity', 'Add a Jira, GitLab, Redmine or GitHub connection in Settings to see your issues.')">
+						:description="t('unity', 'Add a Jira, GitLab, Redmine, GitHub or Asana connection in Settings to see your issues.')">
 						<template #action>
 							<NcButton type="primary" @click="openSettings">{{ t('unity', 'Manage connections') }}</NcButton>
 						</template>

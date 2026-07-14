@@ -174,6 +174,12 @@ export default {
 .unity-rendered :deep(pre) {
 	overflow-x: auto;
 }
+.unity-rendered :deep(blockquote) {
+	border-left: 4px solid var(--color-border-dark);
+	padding-left: 12px;
+	margin: 0 0 0.5em 0;
+	color: var(--color-text-maxcontrast);
+}
 .unity-textile :deep(table),
 .unity-html :deep(table) {
 	border-collapse: collapse;

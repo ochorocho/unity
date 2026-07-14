@@ -10,7 +10,8 @@
 		<NcTextField v-model="form.label"
 			:label="t('unity', 'Name')" />
 
-		<NcTextField v-model="form.baseUrl"
+		<NcTextField v-if="needsBaseUrl"
+			v-model="form.baseUrl"
 			:label="baseUrlLabel"
 			:placeholder="baseUrlPlaceholder" />
 
@@ -42,6 +43,11 @@
 				<option value="markdown">{{ t('unity', 'Markdown') }}</option>
 			</select>
 		</template>
+
+		<NcTextField v-if="form.tracker === 'asana'"
+			v-model="form.settings.workspace"
+			:label="t('unity', 'Workspace (GID, optional)')"
+			:placeholder="t('unity', 'Leave blank to use your first workspace')" />
 
 		<NcNoteCard v-if="help" type="info" class="unity-token-help">
 			<p class="unity-help-title">{{ t('unity', 'Required token permissions') }}</p>
@@ -113,8 +119,12 @@ export default {
 		needsUsername() {
 			return this.form.tracker === 'jira'
 		},
+		needsBaseUrl() {
+			// Asana is SaaS-only; the base URL is fixed and may be left blank.
+			return this.form.tracker !== 'asana'
+		},
 		valid() {
-			if (this.form.baseUrl.trim() === '') {
+			if (this.needsBaseUrl && this.form.baseUrl.trim() === '') {
 				return false
 			}
 			if (this.isNew && this.form.token.trim() === '') {
