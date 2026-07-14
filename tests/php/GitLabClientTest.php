@@ -391,6 +391,55 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame([7], $captured['assignee_ids']);
 	}
 
+	public function testGetRelationTypesOffersOnlyRelatesOnCommunityEdition(): void {
+		// Community Edition (enterprise:false) doesn't support blocking links.
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			return $this->response(200, ['version' => '16.0.0', 'enterprise' => false]);
+		});
+		$ids = array_column($this->client->getRelationTypes($this->connection, ['project' => '12', 'iid' => '5']), 'id');
+		$this->assertSame(['relates_to'], $ids);
+	}
+
+	public function testGetRelationTypesIncludesBlockingOnEnterprise(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			return $this->response(200, ['version' => '16.0.0-ee', 'enterprise' => true]);
+		});
+		$ids = array_column($this->client->getRelationTypes($this->connection, ['project' => '12', 'iid' => '5']), 'id');
+		$this->assertSame(['relates_to', 'blocks', 'is_blocked_by'], $ids);
+	}
+
+	public function testAddRelationIsBlockedByPostsBlocksFromTarget(): void {
+		// GitLab's is_blocked_by POST is buggy, so create `blocks` from the target.
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/links')) {
+				$captured = ['url' => $u, 'options' => $o];
+				return $this->response(201, ['link_type' => 'blocks']);
+			}
+			// read-back on the current issue's links
+			return $this->response(200, [
+				['iid' => 9, 'project_id' => 34, 'title' => 'Blocker', 'state' => 'opened',
+					'web_url' => 'https://gitlab.com/grp/other/-/issues/9', 'references' => ['full' => 'grp/other#9'],
+					'link_type' => 'is_blocked_by', 'issue_link_id' => 303],
+			]);
+		});
+
+		$relation = $this->client->addRelation(
+			$this->connection,
+			['project' => '12', 'iid' => '5', 'path' => 'grp/app'],
+			'is_blocked_by',
+			['project' => '34', 'iid' => '9', 'path' => 'grp/other'],
+		);
+
+		// POST goes to the TARGET issue's links, creating a `blocks` link back to current.
+		$this->assertStringContainsString('/projects/34/issues/9/links', $captured['url']);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame('blocks', $body['link_type']);
+		$this->assertSame('12', $body['target_project_id']);
+		$this->assertSame('5', $body['target_issue_iid']);
+		$this->assertSame('303', $relation->id);
+	}
+
 	public function testGetRelationsMapsLinks(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

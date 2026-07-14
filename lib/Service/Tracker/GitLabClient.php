@@ -502,17 +502,40 @@ class GitLabClient extends AbstractTrackerClient {
 	}
 
 	/**
-	 * `blocks`/`is_blocked_by` require GitLab Premium; they are still offered and
-	 * the API surfaces a clear error on Free tier when a write is attempted.
+	 * `relates_to` works on every tier. Blocking relationships (`blocks`/
+	 * `is_blocked_by`) require GitLab Premium/Ultimate, so they are only offered on
+	 * instances that support them — Community Edition rejects those link_type values
+	 * with "link_type does not have a valid value".
 	 *
 	 * @return list<array{id: string, name: string}>
 	 */
 	public function getRelationTypes(Connection $connection, array $refParts): array {
-		return [
-			['id' => 'relates_to', 'name' => 'Relates to'],
-			['id' => 'blocks', 'name' => 'Blocks'],
-			['id' => 'is_blocked_by', 'name' => 'Is blocked by'],
-		];
+		$types = [['id' => 'relates_to', 'name' => 'Relates to']];
+		if ($this->supportsBlocking($connection)) {
+			$types[] = ['id' => 'blocks', 'name' => 'Blocks'];
+			$types[] = ['id' => 'is_blocked_by', 'name' => 'Is blocked by'];
+		}
+		return $types;
+	}
+
+	/**
+	 * Whether this GitLab instance supports blocking relationships (a Premium/
+	 * Ultimate feature, only present in Enterprise Edition). Detected from
+	 * /api/v4/metadata's `enterprise` flag; any failure (older GitLab without the
+	 * endpoint, Community Edition) is treated as unsupported.
+	 */
+	private function supportsBlocking(Connection $connection): bool {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/metadata', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Metadata',
+			);
+		} catch (TrackerException $e) {
+			return false;
+		}
+		return ($data['enterprise'] ?? false) === true;
 	}
 
 	/**
@@ -545,16 +568,30 @@ class GitLabClient extends AbstractTrackerClient {
 		if ($targetProject === '' || $targetIid === '') {
 			throw new TrackerException('Invalid target issue');
 		}
+		// GitLab's `is_blocked_by` POST is buggy (400 "link_type does not have a valid
+		// value") even where blocking is licensed, so create the equivalent `blocks`
+		// link from the target issue back to the current one instead.
+		if ($type === 'is_blocked_by') {
+			$linkUrl = $this->issueUrl($connection, $targetParts) . '/links';
+			$linkBody = [
+				'target_project_id' => (string)($refParts['project'] ?? ''),
+				'target_issue_iid' => (string)($refParts['iid'] ?? ''),
+				'link_type' => 'blocks',
+			];
+		} else {
+			$linkUrl = $this->issueUrl($connection, $refParts) . '/links';
+			$linkBody = [
+				'target_project_id' => $targetProject,
+				'target_issue_iid' => $targetIid,
+				'link_type' => $type,
+			];
+		}
 		// POST returns {source_issue, target_issue, link_type} without the link id,
 		// so re-read the links to obtain the issue_link_id needed for deletion.
 		$this->json(
-			$this->request('POST', $this->issueUrl($connection, $refParts) . '/links', [
+			$this->request('POST', $linkUrl, [
 				'headers' => $this->defaultHeaders($connection),
-				'body' => json_encode([
-					'target_project_id' => $targetProject,
-					'target_issue_iid' => $targetIid,
-					'link_type' => $type,
-				]),
+				'body' => json_encode($linkBody),
 			], $connection),
 			'Add relation',
 		);
