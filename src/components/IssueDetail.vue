@@ -50,6 +50,13 @@
 			:reload-key="attachmentsReloadKey"
 			@changed="attachmentsReloadKey++" />
 
+		<IssueRelations v-if="supportsRelations"
+			:issue-ref="issue.ref"
+			:connection-id="issue.connectionId"
+			:reload-key="relationsReloadKey"
+			@changed="relationsReloadKey++"
+			@open="(ref) => $emit('open', ref)" />
+
 		<div v-if="supportsTime" class="unity-time">
 			<div class="unity-time-header">
 				<span class="unity-time-total">
@@ -105,24 +112,26 @@ import LogTime from './LogTime.vue'
 import RenderedText from './RenderedText.vue'
 import TimeRecords from './TimeRecords.vue'
 import IssueAttachments from './IssueAttachments.vue'
+import IssueRelations from './IssueRelations.vue'
 import IssueEdit from './IssueEdit.vue'
 import { trackerById } from '../trackers.js'
 import { humanizeDuration } from '../duration.js'
 
 export default {
 	name: 'IssueDetail',
-	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, CommentList, AddComment, LogTime, RenderedText, TimeRecords, IssueAttachments, IssueEdit },
+	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, CommentList, AddComment, LogTime, RenderedText, TimeRecords, IssueAttachments, IssueRelations, IssueEdit },
 	props: {
 		issue: { type: Object, required: true },
 		comments: { type: Array, default: () => [] },
 		loading: { type: Boolean, default: false },
 	},
-	emits: ['close', 'comment-added', 'time-logged', 'updated'],
+	emits: ['close', 'comment-added', 'time-logged', 'updated', 'open'],
 	data() {
 		return {
 			showLogModal: false,
 			recordsReloadKey: 0,
 			attachmentsReloadKey: 0,
+			relationsReloadKey: 0,
 			editing: false,
 			editRecord: null,
 			dragOver: false,
@@ -150,6 +159,9 @@ export default {
 		},
 		supportsAttachments() {
 			return trackerById(this.issue.tracker).attachments
+		},
+		supportsRelations() {
+			return trackerById(this.issue.tracker).relations
 		},
 		timeSpentText() {
 			return humanizeDuration(this.issue.timeSpentSeconds || 0)

@@ -204,9 +204,9 @@ class RedmineClientTest extends TestCase {
 			return $this->response(200, [
 				'time_entries' => [
 					['id' => 7, 'user' => ['id' => 42, 'name' => 'Alice'], 'hours' => 1.5,
-						'spent_on' => '2026-02-01', 'comments' => 'did work'],
+						'spent_on' => '2026-02-01', 'created_on' => '2026-02-05T08:00:00Z', 'comments' => 'did work'],
 					['id' => 8, 'user' => ['id' => 99, 'name' => 'Bob'], 'hours' => 1,
-						'spent_on' => '2026-02-02', 'comments' => 'other work'],
+						'spent_on' => '2026-02-02', 'created_on' => '2026-02-03T08:00:00Z', 'comments' => 'other work'],
 				],
 				'total_count' => 2,
 			]);
@@ -216,6 +216,7 @@ class RedmineClientTest extends TestCase {
 		$this->assertSame('Alice', $records[0]->author);
 		$this->assertSame(5400, $records[0]->seconds);
 		$this->assertSame('2026-02-01', $records[0]->date);
+		$this->assertSame('2026-02-05T08:00:00Z', $records[0]->createdAt);
 		$this->assertSame('did work', $records[0]->comment);
 		// Alice is the connection user → her own entry is editable/deletable.
 		$this->assertTrue($records[0]->editable);
@@ -472,5 +473,132 @@ class RedmineClientTest extends TestCase {
 		});
 		$this->client->updateIssue($this->connection, ['id' => '55'], ['type' => '2']);
 		$this->assertSame(2, $captured['issue']['tracker_id']);
+	}
+
+	public function testSearchAssigneesCreateContextFiltersMemberships(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, ['memberships' => [
+				['user' => ['id' => 2, 'name' => 'Alice']],
+				['user' => ['id' => 3, 'name' => 'Bob']],
+			]]);
+		});
+		$out = $this->client->searchAssignees($this->connection, ['project' => '27'], 'ali');
+		$this->assertStringContainsString('/projects/27/memberships.json', $captured);
+		$this->assertSame([['id' => '2', 'name' => 'Alice']], $out, 'filtered by name');
+	}
+
+	public function testSearchAssigneesEditContextResolvesProject(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (preg_match('#/issues/55\.json#', $u) === 1) {
+				return $this->response(200, ['issue' => ['id' => 55, 'project' => ['id' => 27]]]);
+			}
+			return $this->response(200, ['memberships' => [['user' => ['id' => 2, 'name' => 'Alice']]]]);
+		});
+		$out = $this->client->searchAssignees($this->connection, ['refParts' => ['id' => '55']], '');
+		$this->assertSame([['id' => '2', 'name' => 'Alice']], $out);
+	}
+
+	public function testCreateIssueEncodesAssignee(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issues.json')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['issue' => ['id' => 7, 'subject' => 'T', 'project' => ['name' => 'P']]]);
+			}
+			return $this->response(200, []);
+		});
+		$this->client->createIssue($this->connection, ['project' => '27', 'title' => 'T', 'assignee' => '3']);
+		$this->assertSame(3, $captured['issue']['assigned_to_id']);
+	}
+
+	public function testGetRelationTypesOffersBothDirections(): void {
+		$byId = [];
+		foreach ($this->client->getRelationTypes($this->connection, ['id' => '55']) as $t) {
+			$byId[$t['id']] = $t['name'];
+		}
+		$this->assertSame('Related to', $byId['relates']);
+		$this->assertSame('Blocks', $byId['blocks']);
+		$this->assertSame('Blocked by', $byId['blocked']);
+		$this->assertSame('Follows', $byId['follows']);
+	}
+
+	public function testGetRelationsOrientsAndResolvesTargets(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (preg_match('#/issues/55\.json#', $u) === 1) {
+				$captured = $o;
+				return $this->response(200, ['issue' => ['id' => 55, 'relations' => [
+					['id' => 1, 'issue_id' => 55, 'issue_to_id' => 82, 'relation_type' => 'blocks'],
+					['id' => 2, 'issue_id' => 40, 'issue_to_id' => 55, 'relation_type' => 'blocks'],
+					['id' => 3, 'issue_id' => 55, 'issue_to_id' => 90, 'relation_type' => 'relates'],
+				]]]);
+			}
+			if (preg_match('#/issues/82\.json#', $u) === 1) {
+				return $this->response(200, ['issue' => ['id' => 82, 'subject' => 'Downstream', 'status' => ['name' => 'New']]]);
+			}
+			if (preg_match('#/issues/40\.json#', $u) === 1) {
+				return $this->response(200, ['issue' => ['id' => 40, 'subject' => 'Upstream', 'status' => ['name' => 'In Progress']]]);
+			}
+			return $this->response(200, ['issue' => ['id' => 90, 'subject' => 'Sibling', 'status' => ['name' => 'New']]]);
+		});
+
+		$relations = $this->client->getRelations($this->connection, ['id' => '55']);
+
+		$this->assertSame('relations', $captured['query']['include']);
+		$this->assertCount(3, $relations);
+		// 55 blocks 82 → the current issue is the source → "Blocks".
+		$this->assertSame('1', $relations[0]->id);
+		$this->assertSame('blocks', $relations[0]->type);
+		$this->assertSame('Blocks', $relations[0]->typeLabel);
+		$this->assertSame('#82', $relations[0]->targetDisplayId);
+		$this->assertSame('Downstream', $relations[0]->targetTitle);
+		$this->assertSame('New', $relations[0]->targetStatus);
+		$this->assertSame('https://redmine.example.com/issues/82', $relations[0]->targetUrl);
+		$this->assertTrue($relations[0]->deletable);
+		$this->assertSame(['t' => 'redmine', 'c' => 'r1', 'p' => ['id' => '82']], Ref::decode($relations[0]->targetRef));
+		// 40 blocks 55 → the current issue is the target → "Blocked by".
+		$this->assertSame('blocked', $relations[1]->type);
+		$this->assertSame('Blocked by', $relations[1]->typeLabel);
+		$this->assertSame('#40', $relations[1]->targetDisplayId);
+		$this->assertSame('Upstream', $relations[1]->targetTitle);
+		// Symmetric relation keeps the same label on both sides.
+		$this->assertSame('relates', $relations[2]->type);
+		$this->assertSame('Related to', $relations[2]->typeLabel);
+	}
+
+	public function testAddRelationPostsRelation(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/relations.json')) {
+				$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+				return $this->response(201, ['relation' => ['id' => 5, 'issue_id' => 55, 'issue_to_id' => 82, 'relation_type' => 'blocks']]);
+			}
+			return $this->response(200, ['issue' => ['id' => 82, 'subject' => 'Downstream', 'status' => ['name' => 'New']]]);
+		});
+
+		$relation = $this->client->addRelation($this->connection, ['id' => '55'], 'blocks', ['id' => '82']);
+
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/issues/55/relations.json', $captured['url']);
+		$body = json_decode($captured['options']['body'], true)['relation'];
+		$this->assertSame(82, $body['issue_to_id']);
+		$this->assertSame('blocks', $body['relation_type']);
+		$this->assertSame('5', $relation->id);
+		$this->assertSame('Blocks', $relation->typeLabel);
+		$this->assertSame('#82', $relation->targetDisplayId);
+		$this->assertSame('Downstream', $relation->targetTitle);
+	}
+
+	public function testDeleteRelation(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u];
+			return $this->response(204, '');
+		});
+		$this->client->deleteRelation($this->connection, ['id' => '55'], '5');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/relations/5.json', $captured['url']);
 	}
 }

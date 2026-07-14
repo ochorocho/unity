@@ -365,4 +365,134 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame('Body', $body['description']);
 		$this->assertSame('#9', $issue->displayId);
 	}
+
+	public function testSearchAssigneesQueriesProjectMembers(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, [
+				['id' => 7, 'name' => 'Alice', 'username' => 'alice'],
+				['id' => 8, 'name' => 'Bob', 'username' => 'bob'],
+			]);
+		});
+		$out = $this->client->searchAssignees($this->connection, ['refParts' => ['project' => '12', 'iid' => '5']], 'al');
+		$this->assertStringContainsString('/projects/12/members/all', $captured['url']);
+		$this->assertSame('al', $captured['options']['query']['query']);
+		$this->assertSame([['id' => '7', 'name' => 'Alice'], ['id' => '8', 'name' => 'Bob']], $out);
+	}
+
+	public function testCreateIssueEncodesAssignee(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = json_decode($o['body'], true);
+			return $this->response(201, ['id' => 1, 'iid' => 9, 'project_id' => 42, 'title' => 'New', 'references' => ['full' => 'g/a#9'], 'web_url' => 'u']);
+		});
+		$this->client->createIssue($this->connection, ['project' => '42', 'title' => 'New', 'assignee' => '7']);
+		$this->assertSame([7], $captured['assignee_ids']);
+	}
+
+	public function testGetRelationsMapsLinks(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, [
+				['iid' => 7, 'project_id' => 12, 'title' => 'Sibling', 'state' => 'opened',
+					'web_url' => 'https://gitlab.com/grp/app/-/issues/7', 'references' => ['full' => 'grp/app#7'],
+					'link_type' => 'relates_to', 'issue_link_id' => 100],
+				['iid' => 9, 'project_id' => 34, 'title' => 'Blocker', 'state' => 'closed',
+					'web_url' => 'https://gitlab.com/grp/other/-/issues/9', 'references' => ['full' => 'grp/other#9'],
+					'link_type' => 'is_blocked_by', 'issue_link_id' => 101],
+			]);
+		});
+
+		$relations = $this->client->getRelations($this->connection, ['project' => '12', 'iid' => '5', 'path' => 'grp/app']);
+
+		$this->assertStringContainsString('/projects/12/issues/5/links', $captured);
+		$this->assertCount(2, $relations);
+		$this->assertSame('100', $relations[0]->id);
+		$this->assertSame('relates_to', $relations[0]->type);
+		$this->assertSame('Relates to', $relations[0]->typeLabel);
+		$this->assertSame('#7', $relations[0]->targetDisplayId);
+		$this->assertSame('Sibling', $relations[0]->targetTitle);
+		$this->assertSame('opened', $relations[0]->targetStatus);
+		$this->assertSame('https://gitlab.com/grp/app/-/issues/7', $relations[0]->targetUrl);
+		$this->assertSame(
+			['t' => 'gitlab', 'c' => 'g1', 'p' => ['project' => '12', 'iid' => '7', 'path' => 'grp/app']],
+			Ref::decode($relations[0]->targetRef),
+		);
+		$this->assertSame('101', $relations[1]->id);
+		$this->assertSame('is_blocked_by', $relations[1]->type);
+		$this->assertSame('Is blocked by', $relations[1]->typeLabel);
+		$this->assertSame('grp/other', Ref::decode($relations[1]->targetRef)['p']['path']);
+	}
+
+	public function testAddRelationPostsLinkAndReadsBack(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/links')) {
+				$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+				return $this->response(201, ['link_type' => 'blocks']);
+			}
+			// getRelations read-back
+			return $this->response(200, [
+				['iid' => 9, 'project_id' => 34, 'title' => 'Blocker', 'state' => 'opened',
+					'web_url' => 'https://gitlab.com/grp/other/-/issues/9', 'references' => ['full' => 'grp/other#9'],
+					'link_type' => 'blocks', 'issue_link_id' => 202],
+			]);
+		});
+
+		$relation = $this->client->addRelation(
+			$this->connection,
+			['project' => '12', 'iid' => '5', 'path' => 'grp/app'],
+			'blocks',
+			['project' => '34', 'iid' => '9', 'path' => 'grp/other'],
+		);
+
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/projects/12/issues/5/links', $captured['url']);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame('34', $body['target_project_id']);
+		$this->assertSame('9', $body['target_issue_iid']);
+		$this->assertSame('blocks', $body['link_type']);
+		// The read-back resolves the issue_link_id needed for later deletion.
+		$this->assertSame('202', $relation->id);
+		$this->assertSame('Blocks', $relation->typeLabel);
+		$this->assertSame('#9', $relation->targetDisplayId);
+	}
+
+	public function testAddRelationSynthesizesWhenReadBackEmpty(): void {
+		// A successful POST whose read-back doesn't surface the link must not error —
+		// return a best-effort relation; the UI refetches the authoritative list.
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if ($m === 'POST' && str_contains($u, '/links')) {
+				return $this->response(201, ['link_type' => 'relates_to']);
+			}
+			return $this->response(200, []); // read-back empty
+		});
+
+		$relation = $this->client->addRelation(
+			$this->connection,
+			['project' => '12', 'iid' => '5', 'path' => 'grp/app'],
+			'relates_to',
+			['project' => '34', 'iid' => '9', 'path' => 'grp/other'],
+		);
+
+		$this->assertSame('relates_to', $relation->type);
+		$this->assertSame('#9', $relation->targetDisplayId);
+		$this->assertSame(
+			['t' => 'gitlab', 'c' => 'g1', 'p' => ['project' => '34', 'iid' => '9', 'path' => 'grp/other']],
+			Ref::decode($relation->targetRef),
+		);
+	}
+
+	public function testDeleteRelation(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u];
+			return $this->response(204, '');
+		});
+		$this->client->deleteRelation($this->connection, ['project' => '12', 'iid' => '5', 'path' => 'grp/app'], '100');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/projects/12/issues/5/links/100', $captured['url']);
+	}
 }

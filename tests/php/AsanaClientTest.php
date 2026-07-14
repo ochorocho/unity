@@ -293,13 +293,14 @@ class AsanaClientTest extends TestCase {
 				return $this->response(200, $this->envelope(['gid' => 'me1']));
 			}
 			return $this->response(200, $this->envelope([
-				['gid' => 'te1', 'duration_minutes' => 90, 'entered_on' => '2026-07-01', 'created_by' => ['gid' => 'me1', 'name' => 'Me']],
+				['gid' => 'te1', 'duration_minutes' => 90, 'entered_on' => '2026-07-01', 'created_at' => '2026-07-05T12:00:00Z', 'created_by' => ['gid' => 'me1', 'name' => 'Me']],
 			]));
 		});
 		$records = $this->client->getTimeRecords($this->connection, ['gid' => '5']);
 		$this->assertCount(1, $records);
 		$this->assertSame(5400, $records[0]->seconds);
 		$this->assertSame('2026-07-01', $records[0]->date);
+		$this->assertSame('2026-07-05T12:00:00Z', $records[0]->createdAt);
 		$this->assertTrue($records[0]->editable);
 	}
 
@@ -522,5 +523,124 @@ class AsanaClientTest extends TestCase {
 		} catch (TrackerException $e) {
 			$this->assertStringContainsString('Bad input: name is required', $e->getMessage());
 		}
+	}
+
+	public function testSearchAssigneesFiltersWorkspaceUsers(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, $this->envelope([
+				['gid' => '101', 'name' => 'Alice'],
+				['gid' => '102', 'name' => 'Bob'],
+			]));
+		});
+		$out = $this->client->searchAssignees($this->connection, ['refParts' => ['gid' => '5']], 'ali');
+		$this->assertStringContainsString('/users', $captured['url']);
+		$this->assertSame('ws1', $captured['options']['query']['workspace']);
+		$this->assertSame([['id' => '101', 'name' => 'Alice']], $out);
+	}
+
+	public function testCreateIssueEncodesAssignee(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && preg_match('#/tasks$#', $u) === 1) {
+				$captured = json_decode($o['body'], true);
+			}
+			return $this->response(200, $this->envelope(['gid' => '9', 'name' => 'New']));
+		});
+		$this->client->createIssue($this->connection, ['project' => 'p1', 'title' => 'New', 'assignee' => '101']);
+		$this->assertSame('101', $captured['data']['assignee']);
+	}
+
+	public function testGetRelationsMapsDependenciesSubtasksAndParent(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/dependencies')) {
+				return $this->response(200, $this->envelope([
+					['gid' => '201', 'name' => 'Blocker', 'completed' => false, 'permalink_url' => 'https://app.asana.com/0/0/201'],
+				]));
+			}
+			if (str_contains($u, '/dependents')) {
+				return $this->response(402, ['errors' => [['message' => 'payment required']]]);
+			}
+			if (str_contains($u, '/subtasks')) {
+				return $this->response(200, $this->envelope([
+					['gid' => '301', 'name' => 'Subtask A', 'completed' => true, 'permalink_url' => 'https://app.asana.com/0/0/301'],
+				]));
+			}
+			// task detail for parent
+			return $this->response(200, $this->envelope(['gid' => '5', 'parent' => ['gid' => '99', 'name' => 'Parent task', 'completed' => false, 'permalink_url' => 'https://app.asana.com/0/0/99']]));
+		});
+
+		$relations = $this->client->getRelations($this->connection, ['gid' => '5']);
+
+		// dependents degraded to nothing (premium), so: dependency + subtask + parent.
+		$this->assertCount(3, $relations);
+		$this->assertSame('depends_on:201', $relations[0]->id);
+		$this->assertSame('Depends on', $relations[0]->typeLabel);
+		$this->assertSame('Blocker', $relations[0]->targetTitle);
+		$this->assertSame('incomplete', $relations[0]->targetStatus);
+		$this->assertSame(['t' => 'asana', 'c' => 'a1', 'p' => ['gid' => '201']], Ref::decode($relations[0]->targetRef));
+		$this->assertSame('subtask:301', $relations[1]->id);
+		$this->assertSame('completed', $relations[1]->targetStatus);
+		// Parent is read-only.
+		$this->assertSame('parent:99', $relations[2]->id);
+		$this->assertSame('parent', $relations[2]->type);
+		$this->assertFalse($relations[2]->deletable);
+	}
+
+	public function testAddDependencyPostsAndReturnsRelation(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/addDependencies')) {
+				$captured = ['url' => $u, 'options' => $o];
+				return $this->response(200, $this->envelope([]));
+			}
+			// GET target task detail
+			return $this->response(200, $this->envelope(['gid' => '201', 'name' => 'Blocker', 'completed' => false, 'permalink_url' => 'https://app.asana.com/0/0/201']));
+		});
+
+		$relation = $this->client->addRelation($this->connection, ['gid' => '5'], 'depends_on', ['gid' => '201']);
+
+		$this->assertStringContainsString('/tasks/5/addDependencies', $captured['url']);
+		$this->assertSame(['201'], json_decode($captured['options']['body'], true)['data']['dependencies']);
+		$this->assertSame('depends_on:201', $relation->id);
+		$this->assertSame('Blocker', $relation->targetTitle);
+	}
+
+	public function testAddSubtaskSetsParentOnTarget(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/setParent')) {
+				$captured = ['url' => $u, 'options' => $o];
+				return $this->response(200, $this->envelope([]));
+			}
+			return $this->response(200, $this->envelope(['gid' => '301', 'name' => 'Child', 'completed' => false, 'permalink_url' => 'https://app.asana.com/0/0/301']));
+		});
+
+		$this->client->addRelation($this->connection, ['gid' => '5'], 'subtask', ['gid' => '301']);
+
+		// setParent is called on the target task, with the current task as parent.
+		$this->assertStringContainsString('/tasks/301/setParent', $captured['url']);
+		$this->assertSame('5', json_decode($captured['options']['body'], true)['data']['parent']);
+	}
+
+	public function testAddDependencySurfacesPremiumError(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			return $this->response(402, ['errors' => [['message' => 'payment required']]]);
+		});
+		$this->expectException(TrackerException::class);
+		$this->expectExceptionMessage('paid Asana plan');
+		$this->client->addRelation($this->connection, ['gid' => '5'], 'depends_on', ['gid' => '201']);
+	}
+
+	public function testDeleteRelationDecomposesCompositeId(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, $this->envelope([]));
+		});
+		$this->client->deleteRelation($this->connection, ['gid' => '5'], 'depends_on:201');
+		$this->assertStringContainsString('/tasks/5/removeDependencies', $captured['url']);
+		$this->assertSame(['201'], json_decode($captured['options']['body'], true)['data']['dependencies']);
 	}
 }

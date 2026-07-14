@@ -234,7 +234,7 @@ class RedmineClient extends AbstractTrackerClient {
 		if ($project !== null && $project !== '') {
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
 				'fields' => $this->describeFields($connection, $project, $type),
 			];
 		}
@@ -290,6 +290,10 @@ class RedmineClient extends AbstractTrackerClient {
 		if ($trackerId > 0) {
 			$issue['tracker_id'] = $trackerId;
 		}
+		$assignee = (string)($target['assignee'] ?? '');
+		if ($assignee !== '') {
+			$issue['assigned_to_id'] = (int)$assignee;
+		}
 		$this->applyFields($issue, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->base($connection) . '/issues.json', [
@@ -319,7 +323,7 @@ class RedmineClient extends AbstractTrackerClient {
 		}
 		// Trackers (Redmine's "type") are global and freely changeable on edit.
 		$types = $this->optionList($connection, '/trackers.json', 'trackers');
-		$assignees = [];
+		$assignee = null;
 		$fields = [];
 		$typeId = '';
 		try {
@@ -333,21 +337,12 @@ class RedmineClient extends AbstractTrackerClient {
 			$issue = is_array($issueData['issue'] ?? null) ? $issueData['issue'] : [];
 			$projectId = (string)($issue['project']['id'] ?? '');
 			$typeId = (string)($issue['tracker']['id'] ?? '');
+			if (isset($issue['assigned_to']['id'])) {
+				$assignee = ['id' => (string)$issue['assigned_to']['id'], 'name' => (string)($issue['assigned_to']['name'] ?? '')];
+			}
 			// Describe fields for the prospective type when switching, else the current one.
 			$effectiveTracker = ($type !== null && $type !== '') ? $type : $typeId;
 			if ($projectId !== '') {
-				$memberships = $this->json(
-					$this->request('GET', $this->base($connection) . '/projects/' . rawurlencode($projectId) . '/memberships.json', [
-						'headers' => $this->defaultHeaders($connection),
-						'query' => ['limit' => '100'],
-					], $connection),
-					'Memberships',
-				);
-				foreach ($memberships['memberships'] ?? [] as $membership) {
-					if (is_array($membership) && isset($membership['user'])) {
-						$assignees[] = ['id' => (string)($membership['user']['id'] ?? ''), 'name' => (string)($membership['user']['name'] ?? '')];
-					}
-				}
 				$inlineCustom = is_array($issue['custom_fields'] ?? null) ? $issue['custom_fields'] : [];
 				$fields = $this->describeFields($connection, $projectId, $effectiveTracker, $this->currentFieldValues($issue), $inlineCustom);
 			}
@@ -356,12 +351,42 @@ class RedmineClient extends AbstractTrackerClient {
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => false, 'labelsFreeText' => false, 'type' => $types !== []],
 			'statuses' => $statuses,
-			'assignees' => $assignees,
+			'assignee' => $assignee,
 			'labels' => [],
 			'fields' => $fields,
 			'types' => $types,
 			'typeId' => $typeId,
 		];
+	}
+
+	public function searchAssignees(Connection $connection, array $context, string $query): array {
+		$projectId = (string)($context['project'] ?? '');
+		if ($projectId === '' && isset($context['refParts'])) {
+			$projectId = $this->issueProjectId($connection, (string)($context['refParts']['id'] ?? ''));
+		}
+		if ($projectId === '') {
+			return [];
+		}
+		// Redmine memberships have no server-side search, so filter by name here.
+		return $this->filterByName($this->membershipOptions($connection, $projectId), $query);
+	}
+
+	/** The project id of an issue, or '' if it can't be resolved. */
+	private function issueProjectId(Connection $connection, string $issueId): string {
+		if ($issueId === '') {
+			return '';
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/issues/' . rawurlencode($issueId) . '.json', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Issue',
+			);
+		} catch (TrackerException $e) {
+			return '';
+		}
+		return (string)($data['issue']['project']['id'] ?? '');
 	}
 
 	// ---- Dynamic fields ----------------------------------------------------
@@ -764,6 +789,7 @@ class RedmineClient extends AbstractTrackerClient {
 				(string)($raw['comments'] ?? ''),
 				editable: $own,
 				deletable: $own,
+				createdAt: $raw['created_on'] ?? null,
 			);
 		}
 		return $records;
@@ -896,6 +922,167 @@ class RedmineClient extends AbstractTrackerClient {
 			], $connection),
 			'Delete attachment',
 		);
+	}
+
+	// ---- Relations ---------------------------------------------------------
+
+	/**
+	 * Redmine's stored relation_type is always the "forward" form; these map it to
+	 * a human label from the source side [0] and the target side [1].
+	 */
+	private const RELATION_LABELS = [
+		'relates' => ['Related to', 'Related to'],
+		'duplicates' => ['Duplicates', 'Duplicated by'],
+		'blocks' => ['Blocks', 'Blocked by'],
+		'precedes' => ['Precedes', 'Follows'],
+		'copied_to' => ['Copied to', 'Copied from'],
+	];
+
+	/** Forward relation_type => its reverse-side key (for the normalized Relation::$type). */
+	private const RELATION_REVERSE = [
+		'relates' => 'relates',
+		'duplicates' => 'duplicated',
+		'blocks' => 'blocked',
+		'precedes' => 'follows',
+		'copied_to' => 'copied_from',
+	];
+
+	/** At most this many relations get a target lookup (bounds the N+1). */
+	private const RELATION_LOOKUP_CAP = 25;
+
+	public function supportsRelations(): bool {
+		return true;
+	}
+
+	/**
+	 * Every direction is offered: Redmine accepts the reverse relation_type on
+	 * POST and normalizes it (swapping source/target), so "Blocked by" etc. work
+	 * from the current issue's endpoint. Parent/child is intentionally excluded —
+	 * it stays in the parent_issue_id dynamic field (getEditMeta), and the
+	 * /relations endpoint never carries it, so there is no overlap.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array {
+		return [
+			['id' => 'relates', 'name' => 'Related to'],
+			['id' => 'blocks', 'name' => 'Blocks'],
+			['id' => 'blocked', 'name' => 'Blocked by'],
+			['id' => 'precedes', 'name' => 'Precedes'],
+			['id' => 'follows', 'name' => 'Follows'],
+			['id' => 'duplicates', 'name' => 'Duplicates'],
+			['id' => 'duplicated', 'name' => 'Duplicated by'],
+			['id' => 'copied_to', 'name' => 'Copied to'],
+			['id' => 'copied_from', 'name' => 'Copied from'],
+		];
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array {
+		$id = (string)($refParts['id'] ?? '');
+		$data = $this->json(
+			$this->request('GET', $this->base($connection) . '/issues/' . rawurlencode($id) . '.json', [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => ['include' => 'relations'],
+			], $connection),
+			'Get relations',
+		);
+		$relations = [];
+		$raw = $data['issue']['relations'] ?? [];
+		if (!is_array($raw)) {
+			return [];
+		}
+		foreach (array_slice($raw, 0, self::RELATION_LOOKUP_CAP) as $rel) {
+			if (is_array($rel)) {
+				$relations[] = $this->buildRelation($connection, $id, $rel);
+			}
+		}
+		return $relations;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @param array $targetParts
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): \OCA\Unity\Model\Relation {
+		$id = (string)($refParts['id'] ?? '');
+		$targetId = (int)($targetParts['id'] ?? 0);
+		if ($targetId <= 0) {
+			throw new TrackerException('Invalid target issue');
+		}
+		$data = $this->json(
+			$this->request('POST', $this->base($connection) . '/issues/' . rawurlencode($id) . '/relations.json', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode(['relation' => ['issue_to_id' => $targetId, 'relation_type' => $type]]),
+			], $connection),
+			'Add relation',
+		);
+		$rel = is_array($data['relation'] ?? null) ? $data['relation'] : [];
+		return $this->buildRelation($connection, $id, $rel);
+	}
+
+	/**
+	 * @param array $refParts
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void {
+		$this->json(
+			$this->request('DELETE', $this->base($connection) . '/relations/' . rawurlencode($relationId) . '.json', [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete relation',
+		);
+	}
+
+	/**
+	 * Orient a raw Redmine relation relative to the current issue, resolve the
+	 * target's subject/status, and build a normalized Relation.
+	 *
+	 * @param array<string, mixed> $rel
+	 */
+	private function buildRelation(Connection $connection, string $currentId, array $rel): \OCA\Unity\Model\Relation {
+		$relType = (string)($rel['relation_type'] ?? 'relates');
+		$labels = self::RELATION_LABELS[$relType] ?? ['Related to', 'Related to'];
+		$fromSource = (string)($rel['issue_id'] ?? '') === $currentId;
+		$targetId = $fromSource ? (string)($rel['issue_to_id'] ?? '') : (string)($rel['issue_id'] ?? '');
+		$typeLabel = $fromSource ? $labels[0] : $labels[1];
+		$typeKey = $fromSource ? $relType : (self::RELATION_REVERSE[$relType] ?? $relType);
+		[$subject, $status] = $this->relationTargetInfo($connection, $targetId);
+		return new \OCA\Unity\Model\Relation(
+			(string)($rel['id'] ?? ''),
+			$typeKey,
+			$typeLabel,
+			Ref::encode('redmine', $connection->id, ['id' => $targetId]),
+			'#' . $targetId,
+			$subject,
+			$status,
+			$this->base($connection) . '/issues/' . $targetId,
+		);
+	}
+
+	/**
+	 * Fetch a related issue's subject + status name (best effort).
+	 *
+	 * @return array{0: string, 1: string} [subject, statusName]
+	 */
+	private function relationTargetInfo(Connection $connection, string $targetId): array {
+		if ($targetId === '') {
+			return ['', ''];
+		}
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/issues/' . rawurlencode($targetId) . '.json', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Get related issue',
+			);
+			$issue = is_array($data['issue'] ?? null) ? $data['issue'] : [];
+			return [(string)($issue['subject'] ?? ''), (string)($issue['status']['name'] ?? '')];
+		} catch (TrackerException $e) {
+			return ['', ''];
+		}
 	}
 
 	protected function fileHeaders(Connection $connection): array {

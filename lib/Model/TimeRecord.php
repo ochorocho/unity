@@ -21,6 +21,8 @@ class TimeRecord implements JsonSerializable {
 		public string $comment = '',
 		public bool $editable = false,
 		public bool $deletable = false,
+		/** When the entry was logged (distinct from $date, the spent date). */
+		public ?string $createdAt = null,
 	) {
 	}
 

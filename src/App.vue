@@ -101,7 +101,8 @@
 								@close="closeDetail"
 								@comment-added="onCommentAdded"
 								@time-logged="onTimeLogged"
-								@updated="onIssueUpdated" />
+								@updated="onIssueUpdated"
+								@open="openIssue({ ref: $event })" />
 							<div v-else-if="loadingRef" class="unity-detail-loading">
 								<NcLoadingIcon :size="44" />
 							</div>

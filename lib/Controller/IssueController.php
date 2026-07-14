@@ -82,7 +82,7 @@ class IssueController extends Controller {
 	 * @param array<string, mixed> $fields provider-native field values keyed by descriptor id
 	 */
 	#[NoAdminRequired]
-	public function create(string $connection, string $project, string $title, string $description = '', string $type = '', array $fields = []): DataResponse {
+	public function create(string $connection, string $project, string $title, string $description = '', string $type = '', string $assignee = '', array $fields = []): DataResponse {
 		if (trim($title) === '') {
 			return new DataResponse(['error' => 'A title is required'], Http::STATUS_BAD_REQUEST);
 		}
@@ -95,6 +95,7 @@ class IssueController extends Controller {
 				'type' => $type,
 				'title' => $title,
 				'description' => $description,
+				'assignee' => $assignee,
 				'fields' => $fields,
 			]);
 			return new DataResponse($issue, Http::STATUS_CREATED);
@@ -158,6 +159,40 @@ class IssueController extends Controller {
 	public function deleteAttachment(string $ref, string $attachmentId): DataResponse {
 		try {
 			$this->issueService->deleteAttachment($this->userId ?? '', $ref, $attachmentId);
+			return new DataResponse([], Http::STATUS_NO_CONTENT);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function relations(string $ref): DataResponse {
+		try {
+			return new DataResponse($this->issueService->getRelations($this->userId ?? '', $ref));
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function addRelation(string $ref, string $type, string $target): DataResponse {
+		if (trim($type) === '' || trim($target) === '') {
+			return new DataResponse(['error' => 'A relation type and target are required'], Http::STATUS_BAD_REQUEST);
+		}
+		try {
+			return new DataResponse(
+				$this->issueService->addRelation($this->userId ?? '', $ref, $type, $target),
+				Http::STATUS_CREATED,
+			);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function deleteRelation(string $ref, string $relationId): DataResponse {
+		try {
+			$this->issueService->deleteRelation($this->userId ?? '', $ref, $relationId);
 			return new DataResponse([], Http::STATUS_NO_CONTENT);
 		} catch (TrackerException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
@@ -244,6 +279,24 @@ class IssueController extends Controller {
 	public function editMeta(string $ref, string $type = ''): DataResponse {
 		try {
 			return new DataResponse($this->issueService->getEditMeta($this->userId ?? '', $ref, $type === '' ? null : $type));
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function assignees(string $ref, string $query = ''): DataResponse {
+		try {
+			return new DataResponse($this->issueService->searchAssignees($this->userId ?? '', $ref, $query));
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	#[NoAdminRequired]
+	public function createAssignees(string $connection, string $project = '', string $query = ''): DataResponse {
+		try {
+			return new DataResponse($this->issueService->searchCreateAssignees($this->userId ?? '', $connection, $project, $query));
 		} catch (TrackerException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}

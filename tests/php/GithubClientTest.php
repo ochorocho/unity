@@ -283,4 +283,115 @@ class GithubClientTest extends TestCase {
 		$this->assertSame('Body', $body['body']);
 		$this->assertSame('#12', $issue->displayId);
 	}
+
+	private const REF = ['owner' => 'octocat', 'repo' => 'Hello-World', 'number' => '1'];
+
+	public function testSearchAssigneesFiltersRepoAssignees(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, [['login' => 'alice'], ['login' => 'bob']]);
+		});
+		$out = $this->client->searchAssignees($this->connection, ['refParts' => self::REF], 'ali');
+		$this->assertStringContainsString('/repos/octocat/Hello-World/assignees', $captured);
+		$this->assertSame([['id' => 'alice', 'name' => 'alice']], $out);
+	}
+
+	public function testSearchAssigneesCreateContextSplitsProject(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, [['login' => 'alice']]);
+		});
+		$this->client->searchAssignees($this->connection, ['project' => 'octocat/Hello-World'], '');
+		$this->assertStringContainsString('/repos/octocat/Hello-World/assignees', $captured);
+	}
+
+	public function testCreateIssueEncodesAssignee(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = json_decode($o['body'], true);
+			return $this->response(201, ['number' => 12, 'title' => 'New', 'repository_url' => 'https://api.github.com/repos/octocat/Hello-World']);
+		});
+		$this->client->createIssue($this->connection, ['project' => 'octocat/Hello-World', 'title' => 'New', 'assignee' => 'alice']);
+		$this->assertSame(['alice'], $captured['assignees']);
+	}
+
+	public function testGetRelationsMapsSubIssuesAndParent(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/sub_issues')) {
+				return $this->response(200, [
+					['id' => 900, 'number' => 5, 'title' => 'Child A', 'state' => 'open',
+						'html_url' => 'https://github.com/octocat/Hello-World/issues/5',
+						'repository_url' => 'https://api.github.com/repos/octocat/Hello-World'],
+				]);
+			}
+			if (str_contains($u, '/parent')) {
+				return $this->response(200, ['id' => 700, 'number' => 2, 'title' => 'Epic', 'state' => 'open',
+					'html_url' => 'https://github.com/octocat/Hello-World/issues/2',
+					'repository_url' => 'https://api.github.com/repos/octocat/Hello-World']);
+			}
+			return $this->response(404, []);
+		});
+
+		$relations = $this->client->getRelations($this->connection, self::REF);
+
+		$this->assertCount(2, $relations);
+		$this->assertSame('sub-issue', $relations[0]->type);
+		$this->assertSame('900', $relations[0]->id, 'relation id is the numeric database id');
+		$this->assertSame('#5', $relations[0]->targetDisplayId);
+		$this->assertSame('Child A', $relations[0]->targetTitle);
+		$this->assertTrue($relations[0]->deletable);
+		$this->assertSame(
+			['t' => 'github', 'c' => 'h1', 'p' => ['owner' => 'octocat', 'repo' => 'Hello-World', 'number' => '5']],
+			Ref::decode($relations[0]->targetRef),
+		);
+		// Parent is read-only.
+		$this->assertSame('parent', $relations[1]->type);
+		$this->assertFalse($relations[1]->deletable);
+	}
+
+	public function testGetRelationsToleratesNoParent(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/sub_issues')) {
+				return $this->response(200, []);
+			}
+			return $this->response(404, ['message' => 'Not Found']);
+		});
+		$this->assertSame([], $this->client->getRelations($this->connection, self::REF));
+	}
+
+	public function testAddRelationResolvesNumericIdThenPosts(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/sub_issues')) {
+				$captured = ['url' => $u, 'options' => $o];
+				return $this->response(200, []);
+			}
+			// GET target issue → resolve its numeric id
+			return $this->response(200, ['id' => 950, 'number' => 8, 'title' => 'Task', 'state' => 'open',
+				'html_url' => 'https://github.com/octocat/Hello-World/issues/8',
+				'repository_url' => 'https://api.github.com/repos/octocat/Hello-World']);
+		});
+
+		$relation = $this->client->addRelation($this->connection, self::REF, 'sub-issue',
+			['owner' => 'octocat', 'repo' => 'Hello-World', 'number' => '8']);
+
+		$this->assertStringContainsString('/repos/octocat/Hello-World/issues/1/sub_issues', $captured['url']);
+		$this->assertSame(950, json_decode($captured['options']['body'], true)['sub_issue_id']);
+		$this->assertSame('950', $relation->id);
+		$this->assertSame('#8', $relation->targetDisplayId);
+	}
+
+	public function testDeleteRelationPostsNumericId(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(200, []);
+		});
+		$this->client->deleteRelation($this->connection, self::REF, '900');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/repos/octocat/Hello-World/issues/1/sub_issue', $captured['url']);
+		$this->assertSame(900, json_decode($captured['options']['body'], true)['sub_issue_id']);
+	}
 }

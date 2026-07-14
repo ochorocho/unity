@@ -22,10 +22,10 @@
 			</div>
 			<div v-if="meta.capabilities.assignee" class="unity-edit-field">
 				<label class="unity-edit-label">{{ t('unity', 'Assignee') }}</label>
-				<select v-model="form.assignee" class="unity-edit-select">
-					<option value="">{{ t('unity', '(no change)') }}</option>
-					<option v-for="a in meta.assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
-				</select>
+				<AssigneePicker mode="edit"
+					:issue-ref="issue.ref"
+					:current="meta.assignee"
+					@change="assigneeChoice = $event" />
 			</div>
 			<div v-if="meta.capabilities.labels" class="unity-edit-field">
 				<NcSelect v-model="form.labels"
@@ -65,10 +65,11 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import MarkupEditor from './MarkupEditor.vue'
 import DynamicField from './DynamicField.vue'
+import AssigneePicker from './AssigneePicker.vue'
 
 export default {
 	name: 'IssueEdit',
-	components: { NcTextField, NcButton, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField },
+	components: { NcTextField, NcButton, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField, AssigneePicker },
 	props: {
 		issue: { type: Object, required: true },
 	},
@@ -79,9 +80,12 @@ export default {
 				title: this.issue.title || '',
 				description: this.issue.description || '',
 				status: '',
-				assignee: '',
 				labels: [],
 			},
+			// Assignee is handled by AssigneePicker: the current choice ({id,name}) and
+			// the issue's original assignee id, so save() only sends a real change.
+			assigneeChoice: null,
+			assigneeOriginalId: '',
 			meta: null,
 			loadingMeta: false,
 			saving: false,
@@ -157,7 +161,7 @@ export default {
 			// GitLab/GitHub carry native status ids (opened/closed/open); match directly first.
 			const statusById = (this.meta.statuses.find((s) => s.id === this.issue.status) || {}).id
 			this.form.status = statusById || byName(this.meta.statuses, this.issue.status) || ''
-			this.form.assignee = byName(this.meta.assignees, this.issue.assignee)
+			this.assigneeOriginalId = (this.meta.assignee && this.meta.assignee.id) || ''
 			if (this.meta.capabilities.labelsFreeText) {
 				this.form.labels = [...(this.issue.labels || [])]
 			} else {
@@ -175,8 +179,12 @@ export default {
 				if (this.meta && this.meta.capabilities.status && this.form.status !== '') {
 					payload.status = this.form.status
 				}
-				if (this.meta && this.meta.capabilities.assignee && this.form.assignee !== '') {
-					payload.assignee = this.form.assignee
+				// Send the assignee only when it actually changed. This covers set,
+				// change, and clear (Unassigned → id ''); an untouched picker matches
+				// the original and is skipped.
+				if (this.meta && this.meta.capabilities.assignee && this.assigneeChoice
+					&& this.assigneeChoice.id !== this.assigneeOriginalId) {
+					payload.assignee = this.assigneeChoice.id
 				}
 				if (this.meta && this.meta.capabilities.labels) {
 					payload.labels = this.form.labels

@@ -18,6 +18,7 @@ return [
 
 		// Issue creation
 		['name' => 'issue#createMeta', 'url' => '/create-meta', 'verb' => 'GET'],
+		['name' => 'issue#createAssignees', 'url' => '/create-assignees', 'verb' => 'GET'],
 		['name' => 'issue#create', 'url' => '/create', 'verb' => 'POST'],
 
 		// Issues
@@ -25,6 +26,7 @@ return [
 		['name' => 'issue#show', 'url' => '/issues/{ref}', 'verb' => 'GET'],
 		['name' => 'issue#update', 'url' => '/issues/{ref}', 'verb' => 'PUT'],
 		['name' => 'issue#editMeta', 'url' => '/issues/{ref}/edit-meta', 'verb' => 'GET'],
+		['name' => 'issue#assignees', 'url' => '/issues/{ref}/assignees', 'verb' => 'GET'],
 		['name' => 'issue#file', 'url' => '/issues/{ref}/file', 'verb' => 'GET'],
 		['name' => 'issue#comments', 'url' => '/issues/{ref}/comments', 'verb' => 'GET'],
 		['name' => 'issue#addComment', 'url' => '/issues/{ref}/comments', 'verb' => 'POST'],
@@ -33,6 +35,9 @@ return [
 		['name' => 'issue#deleteAttachment', 'url' => '/issues/{ref}/attachments/{attachmentId}', 'verb' => 'DELETE'],
 		['name' => 'issue#updateComment', 'url' => '/issues/{ref}/comments/{commentId}', 'verb' => 'PUT'],
 		['name' => 'issue#deleteComment', 'url' => '/issues/{ref}/comments/{commentId}', 'verb' => 'DELETE'],
+		['name' => 'issue#relations', 'url' => '/issues/{ref}/relations', 'verb' => 'GET'],
+		['name' => 'issue#addRelation', 'url' => '/issues/{ref}/relations', 'verb' => 'POST'],
+		['name' => 'issue#deleteRelation', 'url' => '/issues/{ref}/relations/{relationId}', 'verb' => 'DELETE'],
 		['name' => 'issue#timeRecords', 'url' => '/issues/{ref}/time', 'verb' => 'GET'],
 		['name' => 'issue#logTime', 'url' => '/issues/{ref}/time', 'verb' => 'POST'],
 		['name' => 'issue#updateTime', 'url' => '/issues/{ref}/time/{recordId}', 'verb' => 'PUT'],

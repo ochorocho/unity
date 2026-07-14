@@ -41,6 +41,11 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		return false;
 	}
 
+	/** Default: no issue relations. Overridden by trackers with a relations API. */
+	public function supportsRelations(): bool {
+		return false;
+	}
+
 	/** Default: creating issues is unsupported. Concrete clients override this. */
 	public function supportsCreate(): bool {
 		return false;
@@ -94,7 +99,7 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	/**
 	 * Default: creating issues is unsupported. Trackers with a create API override.
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string, fields?: array<string, mixed>} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, fields?: array<string, mixed>} $target
 	 */
 	public function createIssue(Connection $connection, array $target): \OCA\Unity\Model\Issue {
 		throw new TrackerException('Creating issues is not supported for this tracker');
@@ -128,6 +133,59 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	 */
 	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void {
 		throw new TrackerException('Attachments are not supported for this tracker');
+	}
+
+	/**
+	 * Default: no relations. Overridden by trackers with a relations API.
+	 *
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array {
+		return [];
+	}
+
+	/**
+	 * Default: no addable relation types. Overridden by trackers with a
+	 * relations API.
+	 *
+	 * @param array $refParts
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array {
+		return [];
+	}
+
+	/**
+	 * Default: creating relations is unsupported. Trackers with a relations API
+	 * override this.
+	 *
+	 * @param array $refParts
+	 * @param array $targetParts
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): \OCA\Unity\Model\Relation {
+		throw new TrackerException('Relations are not supported for this tracker');
+	}
+
+	/**
+	 * Default: deleting relations is unsupported. Trackers with a relations API
+	 * override this.
+	 *
+	 * @param array $refParts
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void {
+		throw new TrackerException('Relations are not supported for this tracker');
+	}
+
+	/**
+	 * Default: no assignable-user search. Overridden by trackers that support
+	 * assigning issues.
+	 *
+	 * @param array{refParts?: array, project?: string} $context
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function searchAssignees(Connection $connection, array $context, string $query): array {
+		return [];
 	}
 
 	/**
@@ -221,6 +279,25 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		return $this->authHeaders($connection);
 	}
 
+	/**
+	 * Case-insensitive name filter over {id, name} option lists. Used by trackers
+	 * whose user API has no server-side search to filter assignees client-side.
+	 * An empty query returns the list unchanged.
+	 *
+	 * @param list<array{id: string, name: string}> $options
+	 * @return list<array{id: string, name: string}>
+	 */
+	protected function filterByName(array $options, string $query): array {
+		$query = trim($query);
+		if ($query === '') {
+			return $options;
+		}
+		return array_values(array_filter(
+			$options,
+			static fn (array $o): bool => stripos($o['name'], $query) !== false,
+		));
+	}
+
 	/** @return array<string, string> */
 	abstract protected function authHeaders(Connection $connection): array;
 
@@ -309,19 +386,36 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		return null;
 	}
 
-	/** Best-effort extraction of a human-readable error from an API error body. */
+	/**
+	 * Best-effort extraction of a human-readable error from an API error body.
+	 * Aggregates every available detail (rather than only the first message) so
+	 * field-level validation errors surface — notably Jira, which puts them in a
+	 * separate `errors` map that a bare `errorMessages` read would miss.
+	 */
 	protected function extractError(string $body): string {
 		$data = json_decode($body, true);
-		if (is_array($data)) {
-			foreach (['message', 'error', 'error_description'] as $key) {
-				if (isset($data[$key]) && is_string($data[$key])) {
-					return $data[$key];
-				}
-			}
-			if (isset($data['errorMessages'][0]) && is_string($data['errorMessages'][0])) {
-				return $data['errorMessages'][0];
+		if (!is_array($data)) {
+			return '';
+		}
+		$parts = [];
+		foreach (['message', 'error', 'error_description'] as $key) {
+			if (isset($data[$key]) && is_string($data[$key]) && $data[$key] !== '') {
+				$parts[] = $data[$key];
 			}
 		}
-		return '';
+		// Jira: top-level human messages plus a field => reason map.
+		foreach ($data['errorMessages'] ?? [] as $message) {
+			if (is_string($message) && $message !== '') {
+				$parts[] = $message;
+			}
+		}
+		if (is_array($data['errors'] ?? null)) {
+			foreach ($data['errors'] as $field => $reason) {
+				if (is_string($reason) && $reason !== '') {
+					$parts[] = (is_string($field) ? $field . ': ' : '') . $reason;
+				}
+			}
+		}
+		return implode('; ', array_unique($parts));
 	}
 }

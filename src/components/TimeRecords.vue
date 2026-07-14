@@ -88,9 +88,11 @@ export default {
 		}
 	},
 	computed: {
-		// Newest entries first, so "page 1" always shows the latest work.
+		// Most recently logged entries first (by creation time), so "page 1" always
+		// shows the latest additions. Falls back to the spent date where the tracker
+		// exposes no creation timestamp (GitLab).
 		sortedRecords() {
-			return [...this.records].sort((a, b) => this.dateValue(b.date) - this.dateValue(a.date))
+			return [...this.records].sort((a, b) => this.dateValue(b.createdAt || b.date) - this.dateValue(a.createdAt || a.date))
 		},
 		pageCount() {
 			return Math.max(1, Math.ceil(this.sortedRecords.length / PAGE_SIZE))

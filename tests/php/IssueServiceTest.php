@@ -13,6 +13,7 @@ use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
 use OCA\Unity\Model\IssueQuery;
 use OCA\Unity\Model\Ref;
+use OCA\Unity\Model\Relation;
 use OCA\Unity\Model\TimeRecord;
 use OCA\Unity\Model\TrackerSearchResult;
 use OCA\Unity\Service\ConnectionService;
@@ -159,5 +160,85 @@ class IssueServiceTest extends TestCase {
 		$this->client->expects($this->never())->method('deleteAttachment');
 		$this->expectException(TrackerException::class);
 		$this->service->deleteAttachment('admin', Ref::encode('github', 'c1', ['owner' => 'o']), '9');
+	}
+
+	public function testAddRelationRejectsCrossConnectionTarget(): void {
+		$this->client->method('supportsRelations')->willReturn(true);
+		$this->client->expects($this->never())->method('addRelation');
+		$this->expectException(TrackerException::class);
+		$this->service->addRelation(
+			'admin',
+			Ref::encode('jira', 'c1', ['key' => 'ABC-1']),
+			'relates',
+			Ref::encode('jira', 'c2', ['key' => 'DEF-2']),
+		);
+	}
+
+	public function testAddRelationRejectsSelfRelation(): void {
+		$this->client->method('supportsRelations')->willReturn(true);
+		$this->client->expects($this->never())->method('addRelation');
+		$this->expectException(TrackerException::class);
+		$this->service->addRelation(
+			'admin',
+			Ref::encode('jira', 'c1', ['key' => 'ABC-1']),
+			'relates',
+			Ref::encode('jira', 'c1', ['key' => 'ABC-1']),
+		);
+	}
+
+	public function testAddRelationForwardsWhenValid(): void {
+		$this->client->method('supportsRelations')->willReturn(true);
+		$expected = new Relation('9', 'relates', 'Relates to', 'tref', '#2', 'Other', 'Open', 'https://x/2');
+		$this->client->expects($this->once())->method('addRelation')->willReturn($expected);
+		$relation = $this->service->addRelation(
+			'admin',
+			Ref::encode('jira', 'c1', ['key' => 'ABC-1']),
+			'relates',
+			Ref::encode('jira', 'c1', ['key' => 'DEF-2']),
+		);
+		$this->assertSame($expected, $relation);
+	}
+
+	public function testDeleteRelationRejectsNonDeletable(): void {
+		$this->client->method('supportsRelations')->willReturn(true);
+		$this->client->method('getRelations')->willReturn([
+			new Relation('9', 'parent', 'Parent', 'tref', '#2', 'Other', 'Open', 'https://x/2', deletable: false),
+		]);
+		$this->client->expects($this->never())->method('deleteRelation');
+		$this->expectException(TrackerException::class);
+		$this->service->deleteRelation('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '9');
+	}
+
+	public function testDeleteRelationForwardsWhenDeletable(): void {
+		$this->client->method('supportsRelations')->willReturn(true);
+		$this->client->method('getRelations')->willReturn([
+			new Relation('9', 'relates', 'Relates to', 'tref', '#2', 'Other', 'Open', 'https://x/2', deletable: true),
+		]);
+		$this->client->expects($this->once())->method('deleteRelation');
+		$this->service->deleteRelation('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '9');
+	}
+
+	public function testSearchAssigneesDelegatesWithRefContext(): void {
+		$this->client->expects($this->once())->method('searchAssignees')
+			->with($this->anything(), ['refParts' => ['key' => 'ABC-1']], 'al')
+			->willReturn([['id' => 'acc-1', 'name' => 'Alice']]);
+		$out = $this->service->searchAssignees('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), 'al');
+		$this->assertSame([['id' => 'acc-1', 'name' => 'Alice']], $out);
+	}
+
+	public function testSearchCreateAssigneesDelegatesWithProjectContext(): void {
+		$this->client->expects($this->once())->method('searchAssignees')
+			->with($this->anything(), ['project' => 'PROJ'], 'bo')
+			->willReturn([['id' => 'acc-2', 'name' => 'Bob']]);
+		$out = $this->service->searchCreateAssignees('admin', 'c1', 'PROJ', 'bo');
+		$this->assertSame([['id' => 'acc-2', 'name' => 'Bob']], $out);
+	}
+
+	public function testCreateIssueForwardsAssignee(): void {
+		$this->client->method('supportsCreate')->willReturn(true);
+		$this->client->expects($this->once())->method('createIssue')
+			->with($this->anything(), $this->callback(static fn (array $t): bool => ($t['assignee'] ?? null) === 'acc-1'))
+			->willReturn($this->issue('ABC-1', 'One', '2026-01-01'));
+		$this->service->createIssue('admin', 'c1', ['project' => 'P', 'title' => 'T', 'assignee' => 'acc-1']);
 	}
 }

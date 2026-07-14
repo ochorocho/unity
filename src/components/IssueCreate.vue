@@ -49,6 +49,14 @@
 						</select>
 					</div>
 
+					<div v-if="projectId && assigneeSupported" class="unity-create-field">
+						<label class="unity-create-label">{{ t('unity', 'Assignee') }}</label>
+						<AssigneePicker mode="create"
+							:connection-id="connectionId"
+							:project="projectId"
+							@change="assigneeChoice = $event" />
+					</div>
+
 					<div class="unity-create-field">
 						<label class="unity-create-label">{{ t('unity', 'Title') }}</label>
 						<NcTextField v-model="title" :label="t('unity', 'Title')" />
@@ -94,6 +102,7 @@ import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import MarkupEditor from './MarkupEditor.vue'
 import DynamicField from './DynamicField.vue'
+import AssigneePicker from './AssigneePicker.vue'
 import { trackerById, createBodyFormat } from '../trackers.js'
 
 // A dynamic-field value counts as empty when unset, blank, or an empty multi-select.
@@ -106,7 +115,7 @@ function isEmptyValue(value) {
 
 export default {
 	name: 'IssueCreate',
-	components: { NcDialog, NcButton, NcTextField, NcLoadingIcon, NcNoteCard, NcSelect, MarkupEditor, DynamicField },
+	components: { NcDialog, NcButton, NcTextField, NcLoadingIcon, NcNoteCard, NcSelect, MarkupEditor, DynamicField, AssigneePicker },
 	props: {
 		connections: { type: Array, default: () => [] },
 		// The connection to preselect ('' = "All connections" → user must pick).
@@ -136,6 +145,10 @@ export default {
 			fieldValues: {},
 			fieldsLoading: false,
 			fieldsToken: 0,
+			// Assignee (from the project-context create-meta): whether it's offered and
+			// the chosen user ({id,name} from AssigneePicker).
+			assigneeSupported: false,
+			assigneeChoice: null,
 		}
 	},
 	computed: {
@@ -245,6 +258,7 @@ export default {
 				if (data && Array.isArray(data.types) && data.types.length) {
 					this.projectTypes = data.types
 				}
+				this.assigneeSupported = !!(data && data.capabilities && data.capabilities.assignee)
 				this.fields = data && Array.isArray(data.fields) ? data.fields : []
 				this.seedFieldValues()
 			} catch (e) {
@@ -343,6 +357,7 @@ export default {
 					type: this.typeId,
 					title: this.title,
 					description: this.description,
+					assignee: (this.assigneeSupported && this.assigneeChoice) ? this.assigneeChoice.id : '',
 					fields: this.fieldValues,
 				})
 				if (data && data.ref) {

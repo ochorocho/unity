@@ -13,6 +13,7 @@ use OCA\Unity\Model\IssueQuery;
 use OCA\Unity\Model\Ref;
 use OCA\Unity\Service\AdfConverter;
 use OCA\Unity\Service\Tracker\JiraClient;
+use OCA\Unity\Service\Tracker\TrackerException;
 use OCP\Http\Client\IClient;
 use OCP\Http\Client\IClientService;
 use OCP\Http\Client\IResponse;
@@ -328,7 +329,7 @@ class JiraClientTest extends TestCase {
 			return $this->response(200, [
 				'worklogs' => [
 					['id' => '100', 'author' => ['displayName' => 'Alice', 'accountId' => 'acc-me'],
-						'timeSpentSeconds' => 5400, 'started' => '2026-02-01T09:00:00.000+0000',
+						'timeSpentSeconds' => 5400, 'started' => '2026-02-01T09:00:00.000+0000', 'created' => '2026-02-05T10:00:00.000+0000',
 						'comment' => ['type' => 'doc', 'version' => 1, 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'did work']]]]]],
 					['id' => '101', 'author' => ['displayName' => 'Bob', 'accountId' => 'acc-bob'],
 						'timeSpentSeconds' => 3600, 'started' => '2026-02-02T09:00:00.000+0000'],
@@ -340,6 +341,7 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('Alice', $records[0]->author);
 		$this->assertSame(5400, $records[0]->seconds);
 		$this->assertSame('did work', $records[0]->comment);
+		$this->assertSame('2026-02-05T10:00:00.000+0000', $records[0]->createdAt);
 		// The connection user (acc-me) authored the first worklog.
 		$this->assertTrue($records[0]->editable);
 		$this->assertTrue($records[0]->deletable);
@@ -797,5 +799,367 @@ class JiraClientTest extends TestCase {
 		});
 		$this->jira->updateIssue($this->connection, ['key' => 'AKE-4'], ['type' => '5']);
 		$this->assertSame(['id' => '5'], $captured['fields']['issuetype']);
+	}
+
+	public function testSearchAssigneesCloudPassesQueryAndIssueKey(): void {
+		// Regression: Jira Cloud 400s on /user/assignable/search without a `query`.
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, [
+				['accountId' => 'acc-1', 'displayName' => 'Alice'],
+				['accountId' => 'acc-2', 'displayName' => 'Bob'],
+			]);
+		});
+		$out = $this->jira->searchAssignees($this->connection, ['refParts' => ['key' => 'AKE-4']], 'al');
+		$this->assertStringContainsString('/user/assignable/search', $captured['url']);
+		$this->assertSame('al', $captured['options']['query']['query']);
+		$this->assertSame('AKE-4', $captured['options']['query']['issueKey']);
+		$this->assertSame([['id' => 'acc-1', 'name' => 'Alice'], ['id' => 'acc-2', 'name' => 'Bob']], $out);
+	}
+
+	public function testSearchAssigneesCloudEmptyQueryPreloadsList(): void {
+		// Cloud lists all assignable users when `query` is present but empty (omitting
+		// it 400s) — this pre-loads the picker before the user types.
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, [
+				['accountId' => 'acc-1', 'displayName' => 'Alice'],
+				['accountId' => 'acc-2', 'displayName' => 'Bob'],
+			]);
+		});
+		$out = $this->jira->searchAssignees($this->connection, ['refParts' => ['key' => 'AKE-4']], '');
+		$this->assertArrayHasKey('query', $captured['query'], 'query param is present (empty)');
+		$this->assertSame('', $captured['query']['query']);
+		$this->assertSame('AKE-4', $captured['query']['issueKey']);
+		$this->assertSame([['id' => 'acc-1', 'name' => 'Alice'], ['id' => 'acc-2', 'name' => 'Bob']], $out);
+	}
+
+	public function testSearchAssigneesCreateContextUsesProject(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, [['accountId' => 'acc-1', 'displayName' => 'Alice']]);
+		});
+		$this->jira->searchAssignees($this->connection, ['project' => 'AKE'], 'al');
+		$this->assertSame('AKE', $captured['query']['project']);
+		$this->assertArrayNotHasKey('issueKey', $captured['query']);
+	}
+
+	public function testSearchAssigneesServerUsesNameAndAllowsEmptyQuery(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/serverInfo')) {
+				return $this->response(200, ['deploymentType' => 'Server', 'version' => '9.17.5']);
+			}
+			$captured = $o;
+			return $this->response(200, [['name' => 'carol', 'displayName' => 'Carol']]);
+		});
+		$out = $this->jira->searchAssignees($this->serverConnection(), ['refParts' => ['key' => 'DC-1']], '');
+		$this->assertSame('DC-1', $captured['query']['issueKey']);
+		$this->assertArrayNotHasKey('query', $captured['query'], 'empty query omitted');
+		$this->assertSame([['id' => 'carol', 'name' => 'Carol']], $out);
+	}
+
+	public function testCreateIssueEncodesAssignee(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			return $this->response(200, ['key' => 'AKE-9', 'fields' => ['summary' => 'X', 'project' => ['name' => 'P']]]);
+		});
+		$this->jira->createIssue($this->connection, ['project' => 'AKE', 'type' => '1', 'title' => 'New', 'assignee' => 'acc-1']);
+		$this->assertSame('acc-1', $captured['fields']['assignee']['accountId']);
+	}
+
+	public function testGetEditMetaReturnsCurrentAssignee(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/transitions')) {
+				return $this->response(200, ['transitions' => []]);
+			}
+			if (str_contains($u, '/editmeta')) {
+				return $this->response(200, ['fields' => []]);
+			}
+			if (str_contains($u, '/issue/AKE-4') && ($o['query']['fields'] ?? '') === 'assignee') {
+				return $this->response(200, ['fields' => ['assignee' => ['accountId' => 'acc-7', 'displayName' => 'Dana']]]);
+			}
+			return $this->response(200, ['fields' => []]);
+		});
+		$meta = $this->jira->getEditMeta($this->connection, ['key' => 'AKE-4']);
+		$this->assertSame(['id' => 'acc-7', 'name' => 'Dana'], $meta['assignee']);
+		$this->assertArrayNotHasKey('assignees', $meta);
+	}
+
+	public function testGetCreateMetaProjectContextSupportsAssignee(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u) {
+			return $this->response(200, ['fields' => []]);
+		});
+		$meta = $this->jira->getCreateMeta($this->connection, null, 'AKE', '1');
+		$this->assertTrue($meta['capabilities']['assignee']);
+	}
+
+	public function testCreateIssueSurfacesFieldErrors(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				return $this->response(400, ['errorMessages' => [], 'errors' => ['customfield_10011' => 'Epic Name is required.']]);
+			}
+			return $this->response(200, ['fields' => []]); // createMetaFields: nothing required
+		});
+		try {
+			$this->jira->createIssue($this->connection, ['project' => 'AKE', 'type' => '1', 'title' => 'New']);
+			$this->fail('expected TrackerException');
+		} catch (TrackerException $e) {
+			$this->assertStringContainsString('customfield_10011: Epic Name is required.', $e->getMessage());
+		}
+	}
+
+	public function testCreateIssueAutoFillsRequiredOptionField(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [[
+					'fieldId' => 'priority', 'name' => 'Priority', 'required' => true, 'hasDefaultValue' => false,
+					'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '3', 'name' => 'High'], ['id' => '4', 'name' => 'Low']],
+				]]]);
+			}
+			return $this->response(200, ['key' => 'AKE-9', 'fields' => ['summary' => 'X', 'project' => ['name' => 'P']]]);
+		});
+		$this->jira->createIssue($this->connection, ['project' => 'AKE', 'type' => '1', 'title' => 'New']);
+		$this->assertSame(['id' => '3'], $captured['fields']['priority'], 'first allowed value auto-filled');
+	}
+
+	public function testCreateIssueThrowsOnUnsupportedRequiredField(): void {
+		$posted = false;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$posted) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				$posted = true;
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [[
+					'fieldId' => 'customfield_x', 'name' => 'Steps to Reproduce', 'required' => true, 'hasDefaultValue' => false,
+					'schema' => ['type' => 'string'], 'allowedValues' => [],
+				]]]);
+			}
+			return $this->response(200, []);
+		});
+		try {
+			$this->jira->createIssue($this->connection, ['project' => 'AKE', 'type' => '1', 'title' => 'New']);
+			$this->fail('expected TrackerException');
+		} catch (TrackerException $e) {
+			$this->assertStringContainsString('Steps to Reproduce', $e->getMessage());
+		}
+		$this->assertFalse($posted, 'must not POST when a required field cannot be filled');
+	}
+
+	public function testCreateIssueDoesNotAutoFillCustomTypedField(): void {
+		// A Tempo-account-style custom field (numeric value, non-{id} shape) must NOT
+		// be auto-filled from its allowed values — report it instead of sending a bad
+		// value that Jira rejects with "must be a number".
+		$posted = false;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$posted) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				$posted = true;
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [[
+					'fieldId' => 'io.tempo.jira__account', 'name' => 'Account', 'required' => true, 'hasDefaultValue' => false,
+					'schema' => ['type' => 'com.tempoplugin.tempo-accounts:accounts.customfield'],
+					'allowedValues' => [['id' => '42', 'name' => 'Internal']],
+				]]]);
+			}
+			return $this->response(200, []);
+		});
+		try {
+			$this->jira->createIssue($this->connection, ['project' => 'AKE', 'type' => '1', 'title' => 'New']);
+			$this->fail('expected TrackerException');
+		} catch (TrackerException $e) {
+			$this->assertStringContainsString('Account', $e->getMessage());
+		}
+		$this->assertFalse($posted, 'must not POST a guessed value for a custom-typed field');
+	}
+
+	public function testCreateIssueSkipsRequiredFieldWithDefault(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => [[
+					'fieldId' => 'priority', 'name' => 'Priority', 'required' => true, 'hasDefaultValue' => true,
+					'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '3']],
+				]]]);
+			}
+			return $this->response(200, ['key' => 'AKE-9', 'fields' => ['summary' => 'X', 'project' => ['name' => 'P']]]);
+		});
+		$this->jira->createIssue($this->connection, ['project' => 'AKE', 'type' => '1', 'title' => 'New']);
+		$this->assertArrayNotHasKey('priority', $captured['fields'], 'Jira applies its own default');
+	}
+
+	public function testCreateIssueEncodesTempoAccountAsRawId(): void {
+		// The Tempo Account field (option2 base type) must be sent as the raw account
+		// id string, not a {id: …} object which Tempo rejects with "must be a number".
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && preg_match('#/issue$#', $u) === 1) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'B13INTERN-9']);
+			}
+			if (str_contains($u, '/createmeta/B13INTERN/issuetypes/10000')) {
+				return $this->response(200, ['fields' => [[
+					'fieldId' => 'customfield_11400', 'name' => 'Account', 'required' => false, 'hasDefaultValue' => false,
+					'schema' => ['type' => 'option2', 'custom' => 'com.atlassian.plugins.atlassian-connect-plugin:io.tempo.jira__account', 'customId' => 11400],
+					'allowedValues' => [['id' => 15, 'value' => 'b13 intern']],
+				]]]);
+			}
+			return $this->response(200, ['key' => 'B13INTERN-9', 'fields' => ['summary' => 'X', 'project' => ['name' => 'P']]]);
+		});
+		$this->jira->createIssue($this->connection, [
+			'project' => 'B13INTERN', 'type' => '10000', 'title' => 'New',
+			'fields' => ['customfield_11400' => '15'],
+		]);
+		$this->assertSame('15', $captured['fields']['customfield_11400'], 'raw account id, not {id: …}');
+	}
+
+	public function testGetRelationTypesEmitsDirectedEntriesAndDedupesSymmetric(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u) {
+			return $this->response(200, ['issueLinkTypes' => [
+				['id' => '1', 'name' => 'Blocks', 'inward' => 'is blocked by', 'outward' => 'blocks'],
+				['id' => '2', 'name' => 'Relates', 'inward' => 'relates to', 'outward' => 'relates to'],
+			]]);
+		});
+		$types = $this->jira->getRelationTypes($this->connection, ['key' => 'AKE-4']);
+		$byId = [];
+		foreach ($types as $t) {
+			$byId[$t['id']] = $t['name'];
+		}
+		$this->assertSame('Blocks', $byId['Blocks|outward']);
+		$this->assertSame('Is blocked by', $byId['Blocks|inward']);
+		// Symmetric type collapses to a single entry.
+		$this->assertSame('Relates to', $byId['Relates|outward']);
+		$this->assertArrayNotHasKey('Relates|inward', $byId);
+	}
+
+	public function testGetRelationsOrientsByInwardOutwardIssue(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $o;
+			return $this->response(200, ['key' => 'AKE-4', 'fields' => ['issuelinks' => [
+				[
+					'id' => '100',
+					'type' => ['name' => 'Blocks', 'inward' => 'is blocked by', 'outward' => 'blocks'],
+					'outwardIssue' => ['key' => 'AKE-9', 'fields' => ['summary' => 'Downstream', 'status' => ['name' => 'To Do']]],
+				],
+				[
+					'id' => '101',
+					'type' => ['name' => 'Blocks', 'inward' => 'is blocked by', 'outward' => 'blocks'],
+					'inwardIssue' => ['key' => 'AKE-2', 'fields' => ['summary' => 'Upstream', 'status' => ['name' => 'Done']]],
+				],
+			]]]);
+		});
+
+		$relations = $this->jira->getRelations($this->connection, ['key' => 'AKE-4']);
+
+		$this->assertSame('issuelinks', $captured['query']['fields']);
+		$this->assertCount(2, $relations);
+		// outwardIssue → current is the source → outward label "blocks".
+		$this->assertSame('100', $relations[0]->id);
+		$this->assertSame('Blocks|outward', $relations[0]->type);
+		$this->assertSame('Blocks', $relations[0]->typeLabel);
+		$this->assertSame('AKE-9', $relations[0]->targetDisplayId);
+		$this->assertSame('Downstream', $relations[0]->targetTitle);
+		$this->assertSame('To Do', $relations[0]->targetStatus);
+		$this->assertSame('https://acme.atlassian.net/browse/AKE-9', $relations[0]->targetUrl);
+		$this->assertSame(['t' => 'jira', 'c' => 'c1', 'p' => ['key' => 'AKE-9']], Ref::decode($relations[0]->targetRef));
+		// inwardIssue → current is the target → inward label "is blocked by".
+		$this->assertSame('Blocks|inward', $relations[1]->type);
+		$this->assertSame('Is blocked by', $relations[1]->typeLabel);
+		$this->assertSame('AKE-2', $relations[1]->targetDisplayId);
+	}
+
+	public function testAddRelationPostsDirectedLinkAndReadsBack(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issueLink')) {
+				$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+				return $this->response(201, '');
+			}
+			// getRelations read-back
+			return $this->response(200, ['key' => 'AKE-4', 'fields' => ['issuelinks' => [[
+				'id' => '303',
+				'type' => ['name' => 'Blocks', 'inward' => 'is blocked by', 'outward' => 'blocks'],
+				'outwardIssue' => ['key' => 'AKE-9', 'fields' => ['summary' => 'Downstream', 'status' => ['name' => 'To Do']]],
+			]]]]);
+		});
+
+		$relation = $this->jira->addRelation($this->connection, ['key' => 'AKE-4'], 'Blocks|outward', ['key' => 'AKE-9']);
+
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/issueLink', $captured['url']);
+		$body = json_decode($captured['options']['body'], true);
+		$this->assertSame('Blocks', $body['type']['name']);
+		// "outward" → current issue is the outwardIssue (source), target is inward.
+		$this->assertSame('AKE-4', $body['outwardIssue']['key']);
+		$this->assertSame('AKE-9', $body['inwardIssue']['key']);
+		$this->assertSame('303', $relation->id);
+		$this->assertSame('Blocks', $relation->typeLabel);
+	}
+
+	public function testAddRelationInwardSwapsIssues(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issueLink')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, '');
+			}
+			return $this->response(200, ['key' => 'AKE-4', 'fields' => ['issuelinks' => []]]);
+		});
+		// Read-back is empty here; a successful POST must not error — it returns a
+		// synthesized relation (the link exists; the UI refetches).
+		$relation = $this->jira->addRelation($this->connection, ['key' => 'AKE-4'], 'Blocks|inward', ['key' => 'AKE-2']);
+		$this->assertSame('AKE-2', $relation->targetDisplayId);
+		$this->assertSame('Blocks|inward', $relation->type);
+		// "inward" (current is blocked by target) → target is the outwardIssue (source).
+		$this->assertSame('AKE-2', $captured['outwardIssue']['key']);
+		$this->assertSame('AKE-4', $captured['inwardIssue']['key']);
+	}
+
+	public function testAddRelationFallsBackToTargetMatchOnDirectionFlip(): void {
+		// Jira normalized the symmetric link's direction, so the re-read type differs
+		// ("Relates|inward" vs the requested "Relates|outward"); still match by target.
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if ($m === 'POST' && str_contains($u, '/issueLink')) {
+				return $this->response(201, '');
+			}
+			return $this->response(200, ['key' => 'AKE-4', 'fields' => ['issuelinks' => [[
+				'id' => '77',
+				'type' => ['name' => 'Relates', 'inward' => 'relates to', 'outward' => 'relates to'],
+				'inwardIssue' => ['key' => 'AKE-2', 'fields' => ['summary' => 'Other', 'status' => ['name' => 'To Do']]],
+			]]]]);
+		});
+		$relation = $this->jira->addRelation($this->connection, ['key' => 'AKE-4'], 'Relates|outward', ['key' => 'AKE-2']);
+		$this->assertSame('77', $relation->id, 'the real link is returned despite the flipped direction');
+		$this->assertSame('AKE-2', $relation->targetDisplayId);
+	}
+
+	public function testDeleteRelation(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u];
+			return $this->response(204, '');
+		});
+		$this->jira->deleteRelation($this->connection, ['key' => 'AKE-4'], '100');
+		$this->assertSame('DELETE', $captured['method']);
+		$this->assertStringContainsString('/issueLink/100', $captured['url']);
 	}
 }

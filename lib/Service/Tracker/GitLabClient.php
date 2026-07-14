@@ -245,7 +245,7 @@ class GitLabClient extends AbstractTrackerClient {
 		if ($project !== null && $project !== '') {
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
 				'fields' => $this->describeFields($connection, $project),
 			];
 		}
@@ -291,6 +291,10 @@ class GitLabClient extends AbstractTrackerClient {
 			'title' => (string)$target['title'],
 			'description' => (string)($target['description'] ?? ''),
 		];
+		$assignee = (string)($target['assignee'] ?? '');
+		if ($assignee !== '') {
+			$body['assignee_ids'] = [(int)$assignee];
+		}
 		$this->applyFields($body, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/projects/' . rawurlencode($projectId) . '/issues', [
@@ -304,22 +308,6 @@ class GitLabClient extends AbstractTrackerClient {
 
 	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
 		$project = rawurlencode((string)($refParts['project'] ?? ''));
-		$assignees = [];
-		try {
-			$members = $this->json(
-				$this->request('GET', $this->apiRoot($connection) . '/projects/' . $project . '/members/all', [
-					'headers' => $this->defaultHeaders($connection),
-					'query' => ['per_page' => '50'],
-				], $connection),
-				'Members',
-			);
-			foreach ($members as $member) {
-				if (is_array($member)) {
-					$assignees[] = ['id' => (string)($member['id'] ?? ''), 'name' => (string)($member['name'] ?? $member['username'] ?? '')];
-				}
-			}
-		} catch (TrackerException $e) {
-		}
 		$labels = [];
 		try {
 			$found = $this->json(
@@ -336,24 +324,71 @@ class GitLabClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		$assignee = null;
 		$fields = [];
 		try {
 			$projectId = (string)($refParts['project'] ?? '');
-			$current = [];
 			$issue = $this->json(
 				$this->request('GET', $this->issueUrl($connection, $refParts), ['headers' => $this->defaultHeaders($connection)], $connection),
 				'Issue',
 			);
+			$assignee = $this->currentAssignee($issue);
 			$fields = $this->describeFields($connection, $projectId, $this->currentFieldValues($issue));
 		} catch (TrackerException $e) {
 		}
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => true, 'labels' => true, 'labelsFreeText' => false],
 			'statuses' => [['id' => 'opened', 'name' => 'Open'], ['id' => 'closed', 'name' => 'Closed']],
-			'assignees' => $assignees,
+			'assignee' => $assignee,
 			'labels' => $labels,
 			'fields' => $fields,
 		];
+	}
+
+	/**
+	 * The issue's current assignee as {id, name}, or null if unassigned.
+	 *
+	 * @param array<string, mixed> $issue
+	 * @return array{id: string, name: string}|null
+	 */
+	private function currentAssignee(array $issue): ?array {
+		$a = $issue['assignee'] ?? ($issue['assignees'][0] ?? null);
+		if (!is_array($a) || !isset($a['id'])) {
+			return null;
+		}
+		return ['id' => (string)$a['id'], 'name' => (string)($a['name'] ?? $a['username'] ?? '')];
+	}
+
+	public function searchAssignees(Connection $connection, array $context, string $query): array {
+		$project = isset($context['refParts'])
+			? (string)($context['refParts']['project'] ?? '')
+			: (string)($context['project'] ?? '');
+		if ($project === '') {
+			return [];
+		}
+		$params = ['per_page' => '50'];
+		$query = trim($query);
+		if ($query !== '') {
+			$params['query'] = $query;
+		}
+		try {
+			$members = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/projects/' . rawurlencode($project) . '/members/all', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => $params,
+				], $connection),
+				'Members',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($members as $member) {
+			if (is_array($member) && isset($member['id'])) {
+				$out[] = ['id' => (string)$member['id'], 'name' => (string)($member['name'] ?? $member['username'] ?? '')];
+			}
+		}
+		return $out;
 	}
 
 	// ---- Dynamic fields ----------------------------------------------------
@@ -451,6 +486,135 @@ class GitLabClient extends AbstractTrackerClient {
 			$current['confidential'] = (bool)$issue['confidential'];
 		}
 		return $current;
+	}
+
+	// ---- Relations ---------------------------------------------------------
+
+	/** GitLab link_type => human label, from the current issue's perspective. */
+	private const RELATION_LABELS = [
+		'relates_to' => 'Relates to',
+		'blocks' => 'Blocks',
+		'is_blocked_by' => 'Is blocked by',
+	];
+
+	public function supportsRelations(): bool {
+		return true;
+	}
+
+	/**
+	 * `blocks`/`is_blocked_by` require GitLab Premium; they are still offered and
+	 * the API surfaces a clear error on Free tier when a write is attempted.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array {
+		return [
+			['id' => 'relates_to', 'name' => 'Relates to'],
+			['id' => 'blocks', 'name' => 'Blocks'],
+			['id' => 'is_blocked_by', 'name' => 'Is blocked by'],
+		];
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array {
+		$data = $this->json(
+			$this->request('GET', $this->issueUrl($connection, $refParts) . '/links', [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Get relations',
+		);
+		$relations = [];
+		foreach ($data as $raw) {
+			if (is_array($raw)) {
+				$relations[] = $this->buildRelation($connection, $raw);
+			}
+		}
+		return $relations;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @param array $targetParts
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): \OCA\Unity\Model\Relation {
+		$targetProject = (string)($targetParts['project'] ?? '');
+		$targetIid = (string)($targetParts['iid'] ?? '');
+		if ($targetProject === '' || $targetIid === '') {
+			throw new TrackerException('Invalid target issue');
+		}
+		// POST returns {source_issue, target_issue, link_type} without the link id,
+		// so re-read the links to obtain the issue_link_id needed for deletion.
+		$this->json(
+			$this->request('POST', $this->issueUrl($connection, $refParts) . '/links', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode([
+					'target_project_id' => $targetProject,
+					'target_issue_iid' => $targetIid,
+					'link_type' => $type,
+				]),
+			], $connection),
+			'Add relation',
+		);
+		foreach ($this->getRelations($connection, $refParts) as $relation) {
+			$target = Ref::decode($relation->targetRef)['p'];
+			if ((string)($target['project'] ?? '') === $targetProject && (string)($target['iid'] ?? '') === $targetIid) {
+				return $relation;
+			}
+		}
+		// The link was created (POST succeeded); return a best-effort relation rather
+		// than failing if the read-back didn't surface it. The UI refetches for the
+		// authoritative list (with the real issue_link_id).
+		return new \OCA\Unity\Model\Relation(
+			'',
+			$type,
+			self::RELATION_LABELS[$type] ?? 'Relates to',
+			Ref::encode('gitlab', $connection->id, ['project' => $targetProject, 'iid' => $targetIid, 'path' => (string)($targetParts['path'] ?? '')]),
+			'#' . $targetIid,
+			'',
+			'',
+			'',
+		);
+	}
+
+	/**
+	 * @param array $refParts
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void {
+		$this->json(
+			$this->request('DELETE', $this->issueUrl($connection, $refParts) . '/links/' . rawurlencode($relationId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete relation',
+		);
+	}
+
+	/**
+	 * A linked-issue entry from GET /links is a full issue object annotated with
+	 * `link_type` (from the current issue's perspective) and `issue_link_id`.
+	 *
+	 * @param array<string, mixed> $raw
+	 */
+	private function buildRelation(Connection $connection, array $raw): \OCA\Unity\Model\Relation {
+		$linkType = (string)($raw['link_type'] ?? 'relates_to');
+		$iid = (string)($raw['iid'] ?? '');
+		$projectId = (string)($raw['project_id'] ?? '');
+		$path = '';
+		if (isset($raw['references']['full']) && is_string($raw['references']['full'])) {
+			$path = explode('#', $raw['references']['full'])[0];
+		}
+		return new \OCA\Unity\Model\Relation(
+			(string)($raw['issue_link_id'] ?? ''),
+			$linkType,
+			self::RELATION_LABELS[$linkType] ?? 'Relates to',
+			Ref::encode('gitlab', $connection->id, ['project' => $projectId, 'iid' => $iid, 'path' => $path]),
+			'#' . $iid,
+			(string)($raw['title'] ?? ''),
+			(string)($raw['state'] ?? ''),
+			(string)($raw['web_url'] ?? ''),
+		);
 	}
 
 	protected function fileHeaders(Connection $connection): array {

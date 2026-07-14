@@ -252,7 +252,7 @@ class GithubClient extends AbstractTrackerClient {
 			[$owner, $repo] = explode('/', $project, 2);
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
 				'fields' => $this->describeFields($connection, $owner, $repo),
 			];
 		}
@@ -305,6 +305,10 @@ class GithubClient extends AbstractTrackerClient {
 			'title' => (string)$target['title'],
 			'body' => (string)($target['description'] ?? ''),
 		];
+		$assignee = (string)($target['assignee'] ?? '');
+		if ($assignee !== '') {
+			$body['assignees'] = [$assignee];
+		}
 		$this->applyFields($body, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/issues', [
@@ -320,22 +324,6 @@ class GithubClient extends AbstractTrackerClient {
 		$owner = rawurlencode((string)($refParts['owner'] ?? ''));
 		$repo = rawurlencode((string)($refParts['repo'] ?? ''));
 		$repoBase = $this->apiRoot($connection) . '/repos/' . $owner . '/' . $repo;
-		$assignees = [];
-		try {
-			$users = $this->json(
-				$this->request('GET', $repoBase . '/assignees', [
-					'headers' => $this->defaultHeaders($connection),
-					'query' => ['per_page' => '50'],
-				], $connection),
-				'Assignees',
-			);
-			foreach ($users as $user) {
-				if (is_array($user) && isset($user['login'])) {
-					$assignees[] = ['id' => (string)$user['login'], 'name' => (string)$user['login']];
-				}
-			}
-		} catch (TrackerException $e) {
-		}
 		$labels = [];
 		try {
 			$found = $this->json(
@@ -352,28 +340,68 @@ class GithubClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		$assignee = null;
 		$fields = [];
 		try {
-			$owner = (string)($refParts['owner'] ?? '');
-			$repo = (string)($refParts['repo'] ?? '');
+			$ownerRaw = (string)($refParts['owner'] ?? '');
+			$repoRaw = (string)($refParts['repo'] ?? '');
 			$current = [];
 			$issue = $this->json(
 				$this->request('GET', $this->issueUrl($connection, $refParts), ['headers' => $this->defaultHeaders($connection)], $connection),
 				'Issue',
 			);
+			$login = (string)($issue['assignee']['login'] ?? ($issue['assignees'][0]['login'] ?? ''));
+			if ($login !== '') {
+				$assignee = ['id' => $login, 'name' => $login];
+			}
 			if (isset($issue['milestone']['number'])) {
 				$current['milestone'] = (string)$issue['milestone']['number'];
 			}
-			$fields = $this->describeFields($connection, $owner, $repo, $current);
+			$fields = $this->describeFields($connection, $ownerRaw, $repoRaw, $current);
 		} catch (TrackerException $e) {
 		}
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => true, 'labels' => true, 'labelsFreeText' => false],
 			'statuses' => [['id' => 'open', 'name' => 'Open'], ['id' => 'closed', 'name' => 'Closed']],
-			'assignees' => $assignees,
+			'assignee' => $assignee,
 			'labels' => $labels,
 			'fields' => $fields,
 		];
+	}
+
+	public function searchAssignees(Connection $connection, array $context, string $query): array {
+		if (isset($context['refParts'])) {
+			$owner = (string)($context['refParts']['owner'] ?? '');
+			$repo = (string)($context['refParts']['repo'] ?? '');
+		} else {
+			$project = (string)($context['project'] ?? '');
+			if (!str_contains($project, '/')) {
+				return [];
+			}
+			[$owner, $repo] = explode('/', $project, 2);
+		}
+		if ($owner === '' || $repo === '') {
+			return [];
+		}
+		try {
+			$users = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/assignees', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['per_page' => '100'],
+				], $connection),
+				'Assignees',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($users as $user) {
+			if (is_array($user) && isset($user['login'])) {
+				$out[] = ['id' => (string)$user['login'], 'name' => (string)$user['login']];
+			}
+		}
+		// GitHub's assignees endpoint has no search param, so filter by login here.
+		return $this->filterByName($out, $query);
 	}
 
 	// ---- Dynamic fields ----------------------------------------------------
@@ -432,6 +460,120 @@ class GithubClient extends AbstractTrackerClient {
 				$body['milestone'] = (int)$value;
 			}
 		}
+	}
+
+	// ---- Relations ---------------------------------------------------------
+
+	public function supportsRelations(): bool {
+		return true;
+	}
+
+	/**
+	 * GitHub only models a parent/child hierarchy, so the sole addable relation is
+	 * attaching a sub-issue. Parent is read-only (shown but not settable here).
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array {
+		return [['id' => 'sub-issue', 'name' => 'Sub-issue']];
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array {
+		$relations = [];
+		// Children (sub-issues) — removable from this side.
+		$children = $this->json(
+			$this->request('GET', $this->issueUrl($connection, $refParts) . '/sub_issues', [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => ['per_page' => '100'],
+			], $connection),
+			'Get sub-issues',
+		);
+		foreach ($children as $child) {
+			if (is_array($child)) {
+				$relations[] = $this->buildRelation($connection, $child, 'sub-issue', 'Sub-issue', true);
+			}
+		}
+		// Parent — read-only. The endpoint 404s when the issue has no parent.
+		try {
+			$parent = $this->json(
+				$this->request('GET', $this->issueUrl($connection, $refParts) . '/parent', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'Get parent issue',
+			);
+			if (isset($parent['number'])) {
+				$relations[] = $this->buildRelation($connection, $parent, 'parent', 'Parent', false);
+			}
+		} catch (TrackerException $e) {
+			// no parent
+		}
+		return $relations;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @param array $targetParts
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): \OCA\Unity\Model\Relation {
+		// GitHub's sub-issue endpoint needs the child's numeric database id, but our
+		// refParts only carry owner/repo/number — resolve the id from the target.
+		$target = $this->json(
+			$this->request('GET', $this->issueUrl($connection, $targetParts), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Resolve target issue',
+		);
+		$subId = (int)($target['id'] ?? 0);
+		if ($subId <= 0) {
+			throw new TrackerException('Could not resolve the target issue');
+		}
+		$this->json(
+			$this->request('POST', $this->issueUrl($connection, $refParts) . '/sub_issues', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode(['sub_issue_id' => $subId]),
+			], $connection),
+			'Add sub-issue',
+		);
+		return $this->buildRelation($connection, $target, 'sub-issue', 'Sub-issue', true);
+	}
+
+	/**
+	 * @param array $refParts
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void {
+		$this->json(
+			$this->request('DELETE', $this->issueUrl($connection, $refParts) . '/sub_issue', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode(['sub_issue_id' => (int)$relationId]),
+			], $connection),
+			'Remove sub-issue',
+		);
+	}
+
+	/**
+	 * Build a normalized Relation from a GitHub issue object. The relation id is the
+	 * issue's numeric database id, which the sub-issue add/remove endpoints require.
+	 *
+	 * @param array<string, mixed> $raw
+	 */
+	private function buildRelation(Connection $connection, array $raw, string $type, string $label, bool $deletable): \OCA\Unity\Model\Relation {
+		$number = (string)($raw['number'] ?? '');
+		[$owner, $repo] = $this->ownerRepo($raw);
+		return new \OCA\Unity\Model\Relation(
+			(string)($raw['id'] ?? ''),
+			$type,
+			$label,
+			Ref::encode('github', $connection->id, ['owner' => $owner, 'repo' => $repo, 'number' => $number]),
+			'#' . $number,
+			(string)($raw['title'] ?? ''),
+			(string)($raw['state'] ?? ''),
+			(string)($raw['html_url'] ?? ''),
+			deletable: $deletable,
+		);
 	}
 
 	protected function fileHeaders(Connection $connection): array {

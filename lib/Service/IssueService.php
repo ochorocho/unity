@@ -15,6 +15,7 @@ use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
 use OCA\Unity\Model\IssueQuery;
 use OCA\Unity\Model\Ref;
+use OCA\Unity\Model\Relation;
 use OCA\Unity\Model\TrackerSearchResult;
 use OCA\Unity\Service\Tracker\TrackerClientInterface;
 use OCA\Unity\Service\Tracker\TrackerException;
@@ -114,7 +115,7 @@ class IssueService {
 	/**
 	 * Create a new issue on a connection and return it.
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string, fields?: array<string, mixed>} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, fields?: array<string, mixed>} $target
 	 * @throws TrackerException
 	 */
 	public function createIssue(string $userId, string $connectionId, array $target): Issue {
@@ -217,6 +218,58 @@ class IssueService {
 	}
 
 	/**
+	 * List an issue's relations plus whether this tracker supports them and the
+	 * relation types the user can add. Mirrors getAttachments' {supported, …} shape.
+	 *
+	 * @return array{supported: bool, relations: Relation[], types: list<array{id: string, name: string}>}
+	 * @throws TrackerException
+	 */
+	public function getRelations(string $userId, string $ref): array {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		$supported = $client->supportsRelations();
+		return [
+			'supported' => $supported,
+			'relations' => $supported ? $client->getRelations($connection, $parts) : [],
+			'types' => $supported ? $client->getRelationTypes($connection, $parts) : [],
+		];
+	}
+
+	/**
+	 * @throws TrackerException
+	 */
+	public function addRelation(string $userId, string $ref, string $type, string $targetRef): Relation {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		if (!$client->supportsRelations()) {
+			throw new TrackerException('Relations are not supported for this tracker');
+		}
+		$source = Ref::decode($ref);
+		$target = Ref::decode($targetRef);
+		// Providers can only link issues within one tracker instance/connection.
+		if ($target['t'] !== $source['t'] || $target['c'] !== $source['c']) {
+			throw new TrackerException('The related issue must be on the same connection');
+		}
+		if ($target['p'] === $parts) {
+			throw new TrackerException('An issue cannot be related to itself');
+		}
+		$relation = $client->addRelation($connection, $parts, $type, $target['p']);
+		$this->syncState->markTouched($userId, $ref);
+		return $relation;
+	}
+
+	/**
+	 * @throws TrackerException
+	 */
+	public function deleteRelation(string $userId, string $ref, string $relationId): void {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		if (!$client->supportsRelations()) {
+			throw new TrackerException('Relations are not supported for this tracker');
+		}
+		$this->assertRelationDeletable($client, $connection, $parts, $relationId);
+		$client->deleteRelation($connection, $parts, $relationId);
+		$this->syncState->markTouched($userId, $ref);
+	}
+
+	/**
 	 * @return \OCA\Unity\Model\TimeRecord[]
 	 * @throws TrackerException
 	 */
@@ -243,6 +296,28 @@ class IssueService {
 	public function getEditMeta(string $userId, string $ref, ?string $type = null): array {
 		[$client, $connection, $parts] = $this->resolve($userId, $ref);
 		return $client->getEditMeta($connection, $parts, $type);
+	}
+
+	/**
+	 * Search users assignable to an existing issue.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 * @throws TrackerException
+	 */
+	public function searchAssignees(string $userId, string $ref, string $query): array {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		return $client->searchAssignees($connection, ['refParts' => $parts], $query);
+	}
+
+	/**
+	 * Search users assignable to a new issue in a project on a connection.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 * @throws TrackerException
+	 */
+	public function searchCreateAssignees(string $userId, string $connectionId, string $project, string $query): array {
+		[$client, $connection] = $this->resolveConnection($userId, $connectionId);
+		return $client->searchAssignees($connection, ['project' => $project], $query);
 	}
 
 	/**
@@ -327,6 +402,26 @@ class IssueService {
 			return;
 		}
 		throw new TrackerException('Comment not found');
+	}
+
+	/**
+	 * Verify the given relation exists on this issue and may be removed from
+	 * this side (deletable). Mirrors assertCommentAllows.
+	 *
+	 * @param array $parts
+	 * @throws TrackerException
+	 */
+	private function assertRelationDeletable(TrackerClientInterface $client, Connection $connection, array $parts, string $relationId): void {
+		foreach ($client->getRelations($connection, $parts) as $relation) {
+			if ($relation->id !== $relationId) {
+				continue;
+			}
+			if (!$relation->deletable) {
+				throw new TrackerException('This relation cannot be removed');
+			}
+			return;
+		}
+		throw new TrackerException('Relation not found');
 	}
 
 	private function cachedSearch(

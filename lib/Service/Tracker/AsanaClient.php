@@ -412,6 +412,7 @@ class AsanaClient extends AbstractTrackerClient {
 				'',
 				editable: $own,
 				deletable: $own,
+				createdAt: $raw['created_at'] ?? null,
 			);
 		}
 		return $records;
@@ -461,7 +462,7 @@ class AsanaClient extends AbstractTrackerClient {
 		if ($project !== null && $project !== '') {
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
 				'fields' => array_merge(
 					[$this->field('due_on', 'Due date', 'date')],
 					$this->projectCustomFieldMeta($connection, $project)['descriptors'],
@@ -502,6 +503,10 @@ class AsanaClient extends AbstractTrackerClient {
 			'workspace' => $this->resolveWorkspace($connection),
 			'projects' => [$project],
 		];
+		$assignee = (string)($target['assignee'] ?? '');
+		if ($assignee !== '') {
+			$data['assignee'] = $assignee;
+		}
 		$fields = is_array($target['fields'] ?? null) ? $target['fields'] : [];
 		if ($fields !== []) {
 			$this->applyFields($data, $fields, $this->projectCustomFieldMeta($connection, $project)['types']);
@@ -522,23 +527,20 @@ class AsanaClient extends AbstractTrackerClient {
 	// ---- Edit --------------------------------------------------------------
 
 	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
-		$workspace = $this->resolveWorkspace($connection);
-
-		$assignees = [];
+		$assignee = null;
 		try {
-			$users = $this->data(
+			$task = $this->data(
 				$this->json(
-					$this->request('GET', $this->apiRoot($connection) . '/users', [
+					$this->request('GET', $this->taskUrl($connection, $refParts), [
 						'headers' => $this->defaultHeaders($connection),
-						'query' => ['workspace' => $workspace, 'opt_fields' => 'name', 'limit' => '100'],
+						'query' => ['opt_fields' => 'assignee.name,assignee.gid'],
 					], $connection),
-					'Users',
+					'Assignee',
 				),
 			);
-			foreach ($users as $user) {
-				if (is_array($user) && isset($user['gid'])) {
-					$assignees[] = ['id' => (string)$user['gid'], 'name' => (string)($user['name'] ?? $user['gid'])];
-				}
+			$a = is_array($task['assignee'] ?? null) ? $task['assignee'] : null;
+			if ($a !== null && isset($a['gid'])) {
+				$assignee = ['id' => (string)$a['gid'], 'name' => (string)($a['name'] ?? $a['gid'])];
 			}
 		} catch (TrackerException $e) {
 		}
@@ -558,10 +560,35 @@ class AsanaClient extends AbstractTrackerClient {
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => true, 'labelsFreeText' => false],
 			'statuses' => [['id' => 'incomplete', 'name' => 'Incomplete'], ['id' => 'completed', 'name' => 'Completed']],
-			'assignees' => $assignees,
+			'assignee' => $assignee,
 			'labels' => $labels,
 			'fields' => $fields,
 		];
+	}
+
+	public function searchAssignees(Connection $connection, array $context, string $query): array {
+		// Asana assignees are workspace users (not project-scoped); the /users
+		// endpoint has no search param, so filter by name here.
+		try {
+			$users = $this->data(
+				$this->json(
+					$this->request('GET', $this->apiRoot($connection) . '/users', [
+						'headers' => $this->defaultHeaders($connection),
+						'query' => ['workspace' => $this->resolveWorkspace($connection), 'opt_fields' => 'name', 'limit' => '100'],
+					], $connection),
+					'Users',
+				),
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($users as $user) {
+			if (is_array($user) && isset($user['gid'])) {
+				$out[] = ['id' => (string)$user['gid'], 'name' => (string)($user['name'] ?? $user['gid'])];
+			}
+		}
+		return $this->filterByName($out, $query);
 	}
 
 	public function updateIssue(Connection $connection, array $refParts, array $changes): Issue {
@@ -597,6 +624,186 @@ class AsanaClient extends AbstractTrackerClient {
 		}
 
 		return $this->getIssue($connection, $refParts);
+	}
+
+	// ---- Relations ---------------------------------------------------------
+
+	/** Normalized relation-type key => human label. */
+	private const RELATION_LABELS = [
+		'depends_on' => 'Depends on',
+		'dependent' => 'Blocking',
+		'subtask' => 'Subtask',
+		'parent' => 'Parent',
+	];
+
+	/** opt_fields for a related task shown in the relations list. */
+	private const RELATION_FIELDS = 'name,completed,permalink_url';
+
+	public function supportsRelations(): bool {
+		return true;
+	}
+
+	/**
+	 * Asana models relations as dependencies (premium) and the subtask hierarchy.
+	 * Parent is read-only (shown but not settable here).
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array {
+		return [
+			['id' => 'depends_on', 'name' => 'Depends on'],
+			['id' => 'dependent', 'name' => 'Blocking'],
+			['id' => 'subtask', 'name' => 'Subtask'],
+		];
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array {
+		$relations = [];
+		// Dependencies/dependents are premium-gated; degrade to none when unavailable.
+		$relations = array_merge($relations, $this->relatedTasks($connection, $refParts, 'dependencies', 'depends_on', true));
+		$relations = array_merge($relations, $this->relatedTasks($connection, $refParts, 'dependents', 'dependent', true));
+		$relations = array_merge($relations, $this->relatedTasks($connection, $refParts, 'subtasks', 'subtask', false));
+		// Parent (read-only).
+		$raw = $this->data(
+			$this->json(
+				$this->request('GET', $this->taskUrl($connection, $refParts), [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['opt_fields' => 'parent.name,parent.completed,parent.permalink_url'],
+				], $connection),
+				'Get parent',
+			),
+		);
+		$parent = is_array($raw['parent'] ?? null) ? $raw['parent'] : null;
+		if ($parent !== null && isset($parent['gid'])) {
+			$relations[] = $this->buildRelation($connection, $parent, 'parent', false);
+		}
+		return $relations;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @param array $targetParts
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): \OCA\Unity\Model\Relation {
+		$gid = (string)($refParts['gid'] ?? '');
+		$targetGid = (string)($targetParts['gid'] ?? '');
+		if ($targetGid === '') {
+			throw new TrackerException('Invalid target issue');
+		}
+		switch ($type) {
+			case 'depends_on':
+				$this->relationMutation($connection, $this->taskUrl($connection, $refParts) . '/addDependencies', ['dependencies' => [$targetGid]], true);
+				break;
+			case 'dependent':
+				$this->relationMutation($connection, $this->taskUrl($connection, $refParts) . '/addDependents', ['dependents' => [$targetGid]], true);
+				break;
+			case 'subtask':
+				// Making the target a subtask of the current task sets its parent.
+				$this->relationMutation($connection, $this->taskUrl($connection, $targetParts) . '/setParent', ['parent' => $gid], false);
+				break;
+			default:
+				throw new TrackerException('Unsupported relation type');
+		}
+		$target = $this->data(
+			$this->json(
+				$this->request('GET', $this->taskUrl($connection, $targetParts), [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['opt_fields' => self::RELATION_FIELDS],
+				], $connection),
+				'Get related task',
+			),
+		);
+		return $this->buildRelation($connection, $target, $type, true);
+	}
+
+	/**
+	 * @param array $refParts
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void {
+		[$family, $targetGid] = array_pad(explode(':', $relationId, 2), 2, '');
+		if ($targetGid === '') {
+			throw new TrackerException('Invalid relation');
+		}
+		switch ($family) {
+			case 'depends_on':
+				$this->relationMutation($connection, $this->taskUrl($connection, $refParts) . '/removeDependencies', ['dependencies' => [$targetGid]], true);
+				break;
+			case 'dependent':
+				$this->relationMutation($connection, $this->taskUrl($connection, $refParts) . '/removeDependents', ['dependents' => [$targetGid]], true);
+				break;
+			case 'subtask':
+				$this->relationMutation($connection, $this->taskUrl($connection, ['gid' => $targetGid]) . '/setParent', ['parent' => null], false);
+				break;
+			default:
+				throw new TrackerException('This relation cannot be removed');
+		}
+	}
+
+	/**
+	 * List related tasks from a collection endpoint (dependencies/dependents/subtasks).
+	 *
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	private function relatedTasks(Connection $connection, array $refParts, string $collection, string $type, bool $premiumGated): array {
+		$response = $this->request('GET', $this->taskUrl($connection, $refParts) . '/' . $collection, [
+			'headers' => $this->defaultHeaders($connection),
+			'query' => ['opt_fields' => self::RELATION_FIELDS, 'limit' => '100'],
+		], $connection);
+		if ($premiumGated && in_array($response->getStatusCode(), [400, 402, 403], true)) {
+			return [];
+		}
+		$rows = $this->data($this->json($response, 'Get ' . $collection));
+		$relations = [];
+		foreach ($rows as $raw) {
+			if (is_array($raw)) {
+				$relations[] = $this->buildRelation($connection, $raw, $type, true);
+			}
+		}
+		return $relations;
+	}
+
+	/**
+	 * POST a relation mutation. Dependency endpoints are premium; surface a clear
+	 * error on 402/403 rather than a raw API message.
+	 *
+	 * @param array<string, mixed> $data
+	 */
+	private function relationMutation(Connection $connection, string $url, array $data, bool $premiumGated): void {
+		$response = $this->request('POST', $url, [
+			'headers' => $this->writeHeaders($connection),
+			'body' => json_encode(['data' => $data]),
+		], $connection);
+		if ($premiumGated && in_array($response->getStatusCode(), [402, 403], true)) {
+			throw new TrackerException('Dependencies require a paid Asana plan');
+		}
+		$this->json($response, 'Update relation');
+	}
+
+	/**
+	 * Build a normalized Relation from an Asana task object. Asana has no link id,
+	 * so the relation id is a composite "{type}:{targetGid}" that deleteRelation
+	 * decomposes.
+	 *
+	 * @param array<string, mixed> $raw
+	 */
+	private function buildRelation(Connection $connection, array $raw, string $type, bool $deletable): \OCA\Unity\Model\Relation {
+		$gid = (string)($raw['gid'] ?? '');
+		return new \OCA\Unity\Model\Relation(
+			$type . ':' . $gid,
+			$type,
+			self::RELATION_LABELS[$type] ?? $type,
+			Ref::encode('asana', $connection->id, ['gid' => $gid]),
+			'#' . $gid,
+			(string)($raw['name'] ?? ''),
+			($raw['completed'] ?? false) === true ? 'completed' : 'incomplete',
+			(string)($raw['permalink_url'] ?? ''),
+			deletable: $deletable,
+		);
 	}
 
 	// ---- Helpers -----------------------------------------------------------

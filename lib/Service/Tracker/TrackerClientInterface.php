@@ -13,6 +13,7 @@ use OCA\Unity\Model\Comment;
 use OCA\Unity\Model\Connection;
 use OCA\Unity\Model\Issue;
 use OCA\Unity\Model\IssueQuery;
+use OCA\Unity\Model\Relation;
 use OCA\Unity\Model\TimeRecord;
 use OCA\Unity\Model\TrackerSearchResult;
 
@@ -97,7 +98,7 @@ interface TrackerClientInterface {
 	/**
 	 * Create a new issue and return it (normalized, with its ref).
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string, fields?: array<string, mixed>} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, fields?: array<string, mixed>} $target
 	 */
 	public function createIssue(Connection $connection, array $target): Issue;
 
@@ -124,6 +125,46 @@ interface TrackerClientInterface {
 	 */
 	public function deleteAttachment(Connection $connection, array $refParts, string $attachmentId): void;
 
+	/** Whether this tracker exposes issue relations (linked/related issues). */
+	public function supportsRelations(): bool;
+
+	/**
+	 * List an issue's relations to other issues on the same connection.
+	 *
+	 * @param array $refParts
+	 * @return Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array;
+
+	/**
+	 * Addable relation-type vocabulary for this issue, analogous to the
+	 * statuses/labels/assignees option lists in getEditMeta. Each id is passed
+	 * back to addRelation(); the name is the human label shown in the picker.
+	 *
+	 * @param array $refParts
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array;
+
+	/**
+	 * Create a relation from this issue to a target issue on the same connection.
+	 *
+	 * @param array $refParts current issue handle
+	 * @param string $type an id from getRelationTypes()
+	 * @param array $targetParts target issue handle (Ref::decode()['p'], same connection)
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): Relation;
+
+	/**
+	 * Remove an existing relation. Trackers that cannot unlink from this side
+	 * throw (the default in AbstractTrackerClient); such relations are never
+	 * flagged deletable, so the UI won't offer the action.
+	 *
+	 * @param array $refParts
+	 * @param string $relationId a Relation::$id
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void;
+
 	/**
 	 * List stored time entries / worklogs for an issue.
 	 *
@@ -149,11 +190,25 @@ interface TrackerClientInterface {
 	 * current one. Passing `$type` returns the `fields` for that prospective type
 	 * (used to reload the form when the user switches type).
 	 *
+	 * The issue's current `assignee` (`{id, name}` or null) is included so the edit
+	 * form can preselect it; the assignable-user list itself is fetched on demand
+	 * via searchAssignees().
+	 *
 	 * @param array $refParts
 	 * @param string|null $type prospective type id to describe fields for
-	 * @return array{capabilities: array<string, bool>, statuses: list<array{id: string, name: string}>, assignees: list<array{id: string, name: string}>, labels: list<array{id: string, name: string}>, fields?: list<array<string, mixed>>, types?: list<array{id: string, name: string}>, typeId?: string}
+	 * @return array{capabilities: array<string, bool>, statuses: list<array{id: string, name: string}>, assignee: array{id: string, name: string}|null, labels: list<array{id: string, name: string}>, fields?: list<array<string, mixed>>, types?: list<array{id: string, name: string}>, typeId?: string}
 	 */
 	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array;
+
+	/**
+	 * Search users assignable to an existing issue (context has 'refParts') or to a
+	 * new issue in a project (context has 'project'). Each option's id is the same
+	 * identity that updateIssue()/createIssue() expect for the 'assignee' change.
+	 *
+	 * @param array{refParts?: array, project?: string} $context
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function searchAssignees(Connection $connection, array $context, string $query): array;
 
 	/**
 	 * @param array $refParts

@@ -321,6 +321,162 @@ class JiraClient extends AbstractTrackerClient {
 		);
 	}
 
+	// ---- Relations ---------------------------------------------------------
+
+	public function supportsRelations(): bool {
+		return true;
+	}
+
+	/**
+	 * Directed vocabulary from Jira's issue link types: each type yields one entry
+	 * per side (outward + inward), deduped when the type is symmetric ("Relates").
+	 * The id encodes "{typeName}|{direction}" for addRelation().
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	public function getRelationTypes(Connection $connection, array $refParts): array {
+		$data = $this->json(
+			$this->request('GET', $this->apiRoot($connection) . '/issueLinkType', [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Get link types',
+		);
+		$out = [];
+		foreach ($data['issueLinkTypes'] ?? [] as $t) {
+			if (!is_array($t)) {
+				continue;
+			}
+			$name = (string)($t['name'] ?? '');
+			$outward = (string)($t['outward'] ?? '');
+			$inward = (string)($t['inward'] ?? '');
+			if ($name === '') {
+				continue;
+			}
+			$out[] = ['id' => $name . '|outward', 'name' => ucfirst($outward !== '' ? $outward : $name)];
+			if (strcasecmp($inward, $outward) !== 0 && $inward !== '') {
+				$out[] = ['id' => $name . '|inward', 'name' => ucfirst($inward)];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @return \OCA\Unity\Model\Relation[]
+	 */
+	public function getRelations(Connection $connection, array $refParts): array {
+		$key = (string)($refParts['key'] ?? '');
+		$data = $this->json(
+			$this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key), [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => ['fields' => 'issuelinks'],
+			], $connection),
+			'Get relations',
+		);
+		$relations = [];
+		foreach (($data['fields']['issuelinks'] ?? []) as $raw) {
+			if (is_array($raw)) {
+				$relations[] = $this->buildRelation($connection, $raw);
+			}
+		}
+		return $relations;
+	}
+
+	/**
+	 * @param array $refParts
+	 * @param array $targetParts
+	 */
+	public function addRelation(Connection $connection, array $refParts, string $type, array $targetParts): \OCA\Unity\Model\Relation {
+		$key = (string)($refParts['key'] ?? '');
+		$targetKey = (string)($targetParts['key'] ?? '');
+		if ($targetKey === '') {
+			throw new TrackerException('Invalid target issue');
+		}
+		[$name, $direction] = array_pad(explode('|', $type, 2), 2, 'outward');
+		// The outwardIssue is the source of the outward action. For the "outward"
+		// choice the current issue is the source; for "inward" the target is.
+		$body = $direction === 'inward'
+			? ['type' => ['name' => $name], 'outwardIssue' => ['key' => $targetKey], 'inwardIssue' => ['key' => $key]]
+			: ['type' => ['name' => $name], 'outwardIssue' => ['key' => $key], 'inwardIssue' => ['key' => $targetKey]];
+		// POST returns 201 with no body, so re-read to recover the link (with its id).
+		$this->json(
+			$this->request('POST', $this->apiRoot($connection) . '/issueLink', [
+				'headers' => $this->defaultHeaders($connection),
+				'body' => json_encode($body),
+			], $connection),
+			'Add relation',
+		);
+		// Match the created link by target, preferring the same direction. Jira may
+		// normalize a symmetric link's direction (flipping the type) or lag on
+		// read-after-write, so fall back to any link to the target, then to a
+		// synthesized relation — the link exists regardless and the UI refetches.
+		$fallback = null;
+		foreach ($this->getRelations($connection, $refParts) as $relation) {
+			if (Ref::decode($relation->targetRef)['p']['key'] !== $targetKey) {
+				continue;
+			}
+			if ($relation->type === $type) {
+				return $relation;
+			}
+			$fallback ??= $relation;
+		}
+		return $fallback ?? new \OCA\Unity\Model\Relation(
+			'',
+			$type,
+			ucfirst($name),
+			Ref::encode('jira', $connection->id, ['key' => $targetKey]),
+			$targetKey,
+			'',
+			'',
+			rtrim($connection->baseUrl, '/') . '/browse/' . $targetKey,
+		);
+	}
+
+	/**
+	 * @param array $refParts
+	 */
+	public function deleteRelation(Connection $connection, array $refParts, string $relationId): void {
+		$this->json(
+			$this->request('DELETE', $this->apiRoot($connection) . '/issueLink/' . rawurlencode($relationId), [
+				'headers' => $this->defaultHeaders($connection),
+			], $connection),
+			'Delete relation',
+		);
+	}
+
+	/**
+	 * A Jira issuelink entry carries the link type (with inward/outward text) and
+	 * exactly one of inwardIssue/outwardIssue (the other end). outwardIssue means
+	 * the current issue is the source → the outward label applies.
+	 *
+	 * @param array<string, mixed> $raw
+	 */
+	private function buildRelation(Connection $connection, array $raw): \OCA\Unity\Model\Relation {
+		$type = is_array($raw['type'] ?? null) ? $raw['type'] : [];
+		$name = (string)($type['name'] ?? '');
+		if (isset($raw['outwardIssue']) && is_array($raw['outwardIssue'])) {
+			$target = $raw['outwardIssue'];
+			$typeLabel = ucfirst((string)($type['outward'] ?? $name));
+			$direction = 'outward';
+		} else {
+			$target = is_array($raw['inwardIssue'] ?? null) ? $raw['inwardIssue'] : [];
+			$typeLabel = ucfirst((string)($type['inward'] ?? $name));
+			$direction = 'inward';
+		}
+		$targetKey = (string)($target['key'] ?? '');
+		$targetFields = is_array($target['fields'] ?? null) ? $target['fields'] : [];
+		return new \OCA\Unity\Model\Relation(
+			(string)($raw['id'] ?? ''),
+			$name . '|' . $direction,
+			$typeLabel,
+			Ref::encode('jira', $connection->id, ['key' => $targetKey]),
+			$targetKey,
+			(string)($targetFields['summary'] ?? ''),
+			(string)($targetFields['status']['name'] ?? ''),
+			rtrim($connection->baseUrl, '/') . '/browse/' . $targetKey,
+		);
+	}
+
 	public function getComments(Connection $connection, array $refParts): array {
 		$key = (string)($refParts['key'] ?? '');
 		$response = $this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key) . '/comment', [
@@ -455,7 +611,7 @@ class JiraClient extends AbstractTrackerClient {
 			$noType = ($type === null || $type === '');
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => true, 'typeRequired' => true],
+				'capabilities' => ['type' => true, 'typeRequired' => true, 'assignee' => true],
 				'types' => $noType ? $this->issueTypes($connection, $project) : [],
 				'fields' => $this->describeFields($this->createMetaFields($connection, $project, (string)$type)),
 			];
@@ -522,11 +678,19 @@ class JiraClient extends AbstractTrackerClient {
 		if ($description !== '') {
 			$fields['description'] = $this->encodeBody($connection, $description);
 		}
+		$assignee = (string)($target['assignee'] ?? '');
+		if ($assignee !== '') {
+			$fields['assignee'] = $this->isServer($connection) ? ['name' => $assignee] : ['accountId' => $assignee];
+		}
+		$server = $this->isServer($connection);
+		$metaFields = $this->createMetaFields($connection, $projectKey, $typeId);
 		$dynamic = is_array($target['fields'] ?? null) ? $target['fields'] : [];
 		if ($dynamic !== []) {
-			$schemas = $this->fieldSchemas($this->createMetaFields($connection, $projectKey, $typeId));
-			$this->applyFields($fields, $dynamic, $schemas, $this->isServer($connection));
+			$this->applyFields($fields, $dynamic, $this->fieldSchemas($metaFields), $server);
 		}
+		// Fill or flag required create-screen fields the form doesn't render, so a
+		// missing one gives a clear message instead of an opaque HTTP 400.
+		$this->applyRequiredDefaults($fields, $metaFields, $server);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/issue', [
 				'headers' => $this->defaultHeaders($connection),
@@ -565,7 +729,6 @@ class JiraClient extends AbstractTrackerClient {
 
 	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
 		$key = (string)($refParts['key'] ?? '');
-		$server = $this->isServer($connection);
 		$statuses = [];
 		try {
 			$data = $this->json(
@@ -581,24 +744,7 @@ class JiraClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
-		$assignees = [];
-		try {
-			$users = $this->json(
-				$this->request('GET', $this->apiRoot($connection) . '/user/assignable/search', [
-					'headers' => $this->defaultHeaders($connection),
-					'query' => ['issueKey' => $key, 'maxResults' => '50'],
-				], $connection),
-				'Assignable users',
-			);
-			foreach ($users as $user) {
-				if (is_array($user)) {
-					// Cloud addresses users by accountId; Server by name.
-					$id = $server ? (string)($user['name'] ?? '') : (string)($user['accountId'] ?? '');
-					$assignees[] = ['id' => $id, 'name' => (string)($user['displayName'] ?? '')];
-				}
-			}
-		} catch (TrackerException $e) {
-		}
+		$assignee = $this->currentAssignee($connection, $key);
 		$fields = [];
 		$typeId = '';
 		// Offer the project's full issue-type list (same as the create dialog) so the
@@ -622,12 +768,81 @@ class JiraClient extends AbstractTrackerClient {
 		return [
 			'capabilities' => ['status' => true, 'assignee' => true, 'assigneeMulti' => false, 'labels' => true, 'labelsFreeText' => true, 'type' => $types !== []],
 			'statuses' => $statuses,
-			'assignees' => $assignees,
+			'assignee' => $assignee,
 			'labels' => [],
 			'fields' => $fields,
 			'types' => $types,
 			'typeId' => $typeId,
 		];
+	}
+
+	/**
+	 * The issue's current assignee as {id, name}, or null if unassigned. Fetched
+	 * separately (cheap) so the edit form can preselect it in the search picker.
+	 *
+	 * @return array{id: string, name: string}|null
+	 */
+	private function currentAssignee(Connection $connection, string $key): ?array {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/issue/' . rawurlencode($key), [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => ['fields' => 'assignee'],
+				], $connection),
+				'Assignee',
+			);
+		} catch (TrackerException $e) {
+			return null;
+		}
+		$user = $data['fields']['assignee'] ?? null;
+		return is_array($user) ? $this->assigneeOption($connection, $user) : null;
+	}
+
+	/**
+	 * Normalize a Jira user object to an assignee option. Cloud addresses users by
+	 * accountId, Server/DC by name — the same identity updateIssue/createIssue use.
+	 *
+	 * @param array<string, mixed> $user
+	 * @return array{id: string, name: string}
+	 */
+	private function assigneeOption(Connection $connection, array $user): array {
+		$id = $this->isServer($connection) ? (string)($user['name'] ?? '') : (string)($user['accountId'] ?? '');
+		return ['id' => $id, 'name' => (string)($user['displayName'] ?? '')];
+	}
+
+	public function searchAssignees(Connection $connection, array $context, string $query): array {
+		$query = trim($query);
+		$params = ['maxResults' => '50'];
+		// Jira Cloud needs the `query` param present (even empty) alongside
+		// issueKey/project: omitting it 400s, but an empty value returns the full
+		// assignable list — which pre-loads the picker before the user types.
+		// Server/DC lists from issueKey/project alone, so it omits `query` when empty.
+		if ($query !== '' || !$this->isServer($connection)) {
+			$params['query'] = $query;
+		}
+		if (isset($context['refParts'])) {
+			$params['issueKey'] = (string)($context['refParts']['key'] ?? '');
+		} elseif (isset($context['project'])) {
+			$params['project'] = (string)$context['project'];
+		}
+		try {
+			$users = $this->json(
+				$this->request('GET', $this->apiRoot($connection) . '/user/assignable/search', [
+					'headers' => $this->defaultHeaders($connection),
+					'query' => $params,
+				], $connection),
+				'Assignable users',
+			);
+		} catch (TrackerException $e) {
+			return [];
+		}
+		$out = [];
+		foreach ($users as $user) {
+			if (is_array($user)) {
+				$out[] = $this->assigneeOption($connection, $user);
+			}
+		}
+		return $out;
 	}
 
 	/** Project key from a Jira issue key (e.g. "AKE-4" → "AKE"). */
@@ -848,12 +1063,79 @@ class JiraClient extends AbstractTrackerClient {
 		}
 	}
 
+	/** Fields set explicitly by createIssue, or left for Jira to default itself. */
+	private const CREATE_HANDLED_FIELDS = ['project', 'issuetype', 'summary', 'description', 'assignee', 'reporter'];
+
+	/**
+	 * Ensure required create-screen fields the form doesn't render are satisfied:
+	 * fields Jira defaults itself are left alone, option fields are auto-filled with
+	 * their first allowed value, and any remaining required field is reported by
+	 * name (thrown before the POST) instead of surfacing as an opaque HTTP 400.
+	 *
+	 * @param array<string, mixed> $fields create payload (mutated)
+	 * @param list<array<string, mixed>> $metaFields create-meta field entries
+	 * @throws TrackerException when a required field can't be filled
+	 */
+	private function applyRequiredDefaults(array &$fields, array $metaFields, bool $isServer): void {
+		$missing = [];
+		foreach ($metaFields as $entry) {
+			$id = (string)($entry['fieldId'] ?? '');
+			if ($id === '' || isset($fields[$id]) || in_array($id, self::CREATE_HANDLED_FIELDS, true)) {
+				continue;
+			}
+			if (($entry['required'] ?? false) !== true || ($entry['hasDefaultValue'] ?? false) === true) {
+				continue;
+			}
+			// Only auto-fill fields we can encode as a plain {id} option (standard
+			// selects). Custom/number/free-form types (e.g. the Tempo account field)
+			// need a value shape we can't guess, so report them instead of sending a
+			// malformed value that Jira rejects with a confusing error.
+			$schema = is_array($entry['schema'] ?? null) ? $entry['schema'] : [];
+			$allowed = is_array($entry['allowedValues'] ?? null) ? $entry['allowedValues'] : [];
+			$first = $allowed[0]['id'] ?? null;
+			if ($this->isOptionSchema($schema) && is_scalar($first) && (string)$first !== '') {
+				$encoded = $this->encodeJiraValue($schema, (string)$first, $isServer);
+				if ($encoded !== null && $encoded !== []) {
+					$fields[$id] = $encoded;
+					continue;
+				}
+			}
+			$missing[] = (string)($entry['name'] ?? $id);
+		}
+		if ($missing !== []) {
+			throw new TrackerException('This issue type requires field(s) not supported here: ' . implode(', ', $missing) . '. Please set them in Jira.');
+		}
+	}
+
+	/** Option-like schemas whose value encodes to a simple {id} (safe to auto-fill). */
+	private const OPTION_SCHEMA_TYPES = ['option', 'option2', 'priority', 'version', 'component', 'securitylevel', 'group'];
+
+	/**
+	 * Whether a field's value encodes to a plain {id} option (single or array of),
+	 * so a first-allowed-value default can be sent safely.
+	 *
+	 * @param array<string, mixed> $schema
+	 */
+	private function isOptionSchema(array $schema): bool {
+		$type = (string)($schema['type'] ?? '');
+		if (in_array($type, self::OPTION_SCHEMA_TYPES, true)) {
+			return true;
+		}
+		return $type === 'array' && in_array((string)($schema['items'] ?? ''), self::OPTION_SCHEMA_TYPES, true);
+	}
+
 	/**
 	 * @param array<string, mixed> $schema
 	 */
 	private function encodeJiraValue(array $schema, mixed $value, bool $isServer): mixed {
 		$type = (string)($schema['type'] ?? '');
 		$items = (string)($schema['items'] ?? '');
+		// The Tempo Account field (a Connect field with an `option2` base type) takes
+		// the raw account id as a scalar string, not a {id: …} option object — sending
+		// the object makes Tempo reject the create with "value must be a number".
+		if (str_contains((string)($schema['custom'] ?? ''), 'io.tempo.jira__account')) {
+			return ($value === '' || $value === null) ? null : (string)$value;
+		}
 		if ($type === 'array') {
 			$out = [];
 			foreach (is_array($value) ? $value : [$value] as $v) {
@@ -1013,6 +1295,7 @@ class JiraClient extends AbstractTrackerClient {
 				$this->decodeBody($connection, $raw['comment'] ?? null),
 				editable: $own,
 				deletable: $own,
+				createdAt: $raw['created'] ?? null,
 			);
 		}
 		return $records;
