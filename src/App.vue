@@ -96,6 +96,7 @@
 							<!-- Keep the current issue visible while the next one loads;
 							     only show a spinner on first open (nothing to keep). -->
 							<IssueDetail v-if="selected"
+								:key="selected.ref"
 								:issue="selected"
 								:comments="comments"
 								@close="closeDetail"
@@ -191,6 +192,12 @@ export default {
 			loadingRef: null,
 			searchTimer: null,
 			showCreate: false,
+			// The issue ref we want reflected in the URL hash ('' = none). Nextcloud
+			// core navigates back once (~30ms) after we open an issue, stripping our
+			// #issue/<ref>; onHistoryStrip re-asserts it (see setHashRef).
+			hashTargetRef: '',
+			// Loop guard: how many times we may re-assert the hash after a strip.
+			hashReassertBudget: 0,
 		}
 	},
 	computed: {
@@ -223,18 +230,21 @@ export default {
 		if (this.connections.length > 0) {
 			this.reload()
 		}
+		// Re-assert our #issue fragment whenever core's router strips it.
+		window.addEventListener('popstate', this.onHistoryStrip)
+		window.addEventListener('hashchange', this.onHistoryStrip)
 		// Open the issue referenced in the (shareable) URL hash, if any.
 		const ref = this.hashRef()
 		if (ref !== '') {
+			// Arm hash re-assertion for the restored deep link, then load it.
+			this.setHashRef(ref)
 			this.loadSelected(ref)
 		}
-		window.addEventListener('popstate', this.onHashChange)
-		window.addEventListener('hashchange', this.onHashChange)
 		window.addEventListener('keydown', this.onKeydown)
 	},
 	beforeUnmount() {
-		window.removeEventListener('popstate', this.onHashChange)
-		window.removeEventListener('hashchange', this.onHashChange)
+		window.removeEventListener('popstate', this.onHistoryStrip)
+		window.removeEventListener('hashchange', this.onHistoryStrip)
 		window.removeEventListener('keydown', this.onKeydown)
 	},
 	methods: {
@@ -358,6 +368,11 @@ export default {
 		 * issue keeps showing and is updated without a loader flash.
 		 */
 		async loadSelected(ref, silent = false) {
+			// Idempotent open: don't re-load an issue that is already shown or loading
+			// (a silent refresh is the intentional in-place update, so it's exempt).
+			if (!silent && (this.loadingRef === ref || (this.selected && this.selected.ref === ref))) {
+				return
+			}
 			if (!silent) {
 				// Highlight the target in the list, but keep the current issue in the
 				// detail pane until the new one is fully loaded (below).
@@ -374,16 +389,13 @@ export default {
 					this.comments = Array.isArray(comments.data) ? comments.data : []
 					// Viewing an issue dismisses its pending sync notification (fire-and-forget).
 					axios.post(generateUrl('/apps/unity/issues/{ref}/seen', { ref: eref })).catch(() => {})
-				} else if (this.selected === null || this.selected.ref === ref) {
-					// A shared/bookmarked URL pointed at an issue we can't load.
-					this.selected = null
-					this.setHashRef('')
+				} else {
+					// The issue could not be loaded; surface it but keep the URL/state
+					// so a transient failure can't wipe the open issue or the deep link.
+					showError((detail.data && detail.data.error) || this.t('unity', 'Could not load issue details'))
 				}
 			} catch (e) {
 				showError(this.t('unity', 'Could not load issue details'))
-				if (this.selected === null) {
-					this.setHashRef('')
-				}
 			} finally {
 				this.loadingRef = null
 			}
@@ -406,26 +418,44 @@ export default {
 			const match = (window.location.hash || '').match(/^#issue\/(.+)$/)
 			return match ? decodeURIComponent(match[1]) : ''
 		},
-		/** Reflect the selected issue in the shareable URL without scrolling. */
+		/**
+		 * Reflect the selected issue in the shareable URL (#issue/<ref>), or clear it
+		 * with ref=''. Arms onHistoryStrip to re-assert the fragment: Nextcloud core
+		 * runs a global router that, ~30ms after we open an issue, navigates back once
+		 * and strips our fragment. Our write is a state-preserving replaceState (silent
+		 * — fires no popstate/hashchange), so re-asserting does not re-trigger core.
+		 */
 		setHashRef(ref) {
-			if (ref) {
-				const hash = '#issue/' + encodeURIComponent(ref)
-				if (window.location.hash !== hash) {
-					window.history.pushState(null, '', hash)
-				}
-			} else if (window.location.hash) {
-				window.history.pushState(null, '', window.location.pathname + window.location.search)
+			this.hashTargetRef = ref || ''
+			// Enough re-asserts to outlast core's strip(s); capped so a genuine fight
+			// can't loop forever (worst case: the URL ends up without the fragment).
+			this.hashReassertBudget = 10
+			this._writeHash()
+		},
+		/** Write hashTargetRef into the current history entry, preserving state. */
+		_writeHash() {
+			const base = window.location.pathname + window.location.search
+			const url = this.hashTargetRef ? base + '#issue/' + encodeURIComponent(this.hashTargetRef) : base
+			const current = window.location.pathname + window.location.search + window.location.hash
+			if (current !== url) {
+				window.history.replaceState(window.history.state, '', url)
 			}
 		},
-		onHashChange() {
-			const ref = this.hashRef()
-			if (ref === '') {
-				this.selected = null
-				this.loadingRef = null
-				this.comments = []
-			} else if (this.loadingRef !== ref && (this.selected === null || this.selected.ref !== ref)) {
-				this.loadSelected(ref)
+		/**
+		 * Re-assert our fragment after core's router strips it. Bounded by
+		 * hashReassertBudget so an unexpected persistent fight degrades gracefully
+		 * instead of looping.
+		 */
+		onHistoryStrip() {
+			const wantHash = this.hashTargetRef ? '#issue/' + encodeURIComponent(this.hashTargetRef) : ''
+			if ((window.location.hash || '') === wantHash) {
+				return
 			}
+			if (this.hashReassertBudget <= 0) {
+				return
+			}
+			this.hashReassertBudget--
+			this._writeHash()
 		},
 		onCommentAdded(comment) {
 			this.comments.push(comment)
