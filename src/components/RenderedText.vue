@@ -9,9 +9,9 @@
 			@interact-todo="onInteractTodo" />
 	</div>
 	<!-- eslint-disable-next-line vue/no-v-html -->
-	<div v-else-if="format === 'textile'" class="unity-rendered unity-textile" v-html="textileHtml" />
+	<div v-else-if="format === 'textile'" ref="textileRoot" class="unity-rendered unity-textile" v-html="textileHtml" />
 	<!-- eslint-disable-next-line vue/no-v-html -->
-	<div v-else-if="format === 'html'" class="unity-rendered unity-html" v-html="html" />
+	<div v-else-if="format === 'html'" ref="htmlFormatRoot" class="unity-rendered unity-html" v-html="html" />
 	<span v-else class="unity-rendered unity-plaintext">{{ plainText }}</span>
 </template>
 
@@ -20,6 +20,7 @@ import NcRichText from '@nextcloud/vue/components/NcRichText'
 import { proxifyImages, imageAttributes } from '../markdown.js'
 import { renderTextile, renderHtml } from '../render.js'
 import { toggleTaskAt } from '../tasklist.js'
+import { highlightCodeBlocks } from '../highlight.js'
 import { emojify } from '../emoji.js'
 
 export default {
@@ -54,9 +55,19 @@ export default {
 		},
 	},
 	watch: {
-		// Re-enable task checkboxes after a silent re-fetch re-renders the body.
+		// Re-enable task checkboxes and re-highlight code after a silent re-fetch
+		// re-renders the provider HTML.
 		renderedSafe() {
-			this.$nextTick(() => this.enableRenderedTasks())
+			this.$nextTick(() => {
+				this.enableRenderedTasks()
+				this.highlightRendered()
+			})
+		},
+		textileHtml() {
+			this.$nextTick(() => this.highlightRendered())
+		},
+		html() {
+			this.$nextTick(() => this.highlightRendered())
 		},
 	},
 	mounted() {
@@ -67,9 +78,13 @@ export default {
 			this.imageObserver.observe(this.$refs.mdRoot, { childList: true, subtree: true })
 			this.$nextTick(() => this.applyImageDimensions())
 		}
-		if (this.rendered) {
-			this.$nextTick(() => this.enableRenderedTasks())
-		}
+		this.$nextTick(() => {
+			if (this.rendered) {
+				this.enableRenderedTasks()
+			}
+			// The NcRichText (markdown) branch highlights itself; the v-html branches don't.
+			this.highlightRendered()
+		})
 	},
 	beforeUnmount() {
 		if (this.imageObserver) {
@@ -111,6 +126,11 @@ export default {
 					img.setAttribute('height', d.height)
 				}
 			})
+		},
+		// Syntax-highlight code blocks in whichever provider-HTML branch is rendered
+		// (the NcRichText/markdown branch highlights itself).
+		highlightRendered() {
+			highlightCodeBlocks(this.$refs.htmlRoot || this.$refs.htmlFormatRoot || this.$refs.textileRoot)
 		},
 		// Server-rendered bodies (e.g. GitLab) come back with static, disabled task
 		// checkboxes. When the body is editable, re-enable them so they can be ticked.
@@ -186,6 +206,95 @@ export default {
 }
 .unity-rendered :deep(pre) {
 	overflow-x: auto;
+}
+/* Code-block look + syntax-highlight tokens for the provider-HTML paths
+   (GitLab/Asana/Jira Server/Redmine). Scoped to the v-html branches so it never
+   touches the NcRichText/markdown branch, which ships its own hljs theme.
+   GitHub "prettylights" colours (matching NcRichText), with a dark-mode variant. */
+:is(.unity-html, .unity-textile) :deep(pre) {
+	padding: 12px;
+	border-radius: var(--border-radius);
+	background: var(--color-background-dark);
+}
+:is(.unity-html, .unity-textile) :deep(pre code) {
+	padding: 0;
+	background: none;
+}
+:is(.unity-html, .unity-textile) :deep(.hljs-keyword),
+:is(.unity-html, .unity-textile) :deep(.hljs-doctag),
+:is(.unity-html, .unity-textile) :deep(.hljs-type),
+:is(.unity-html, .unity-textile) :deep(.hljs-name),
+:is(.unity-html, .unity-textile) :deep(.hljs-selector-tag) {
+	color: #d73a49;
+}
+:is(.unity-html, .unity-textile) :deep(.hljs-title),
+:is(.unity-html, .unity-textile) :deep(.hljs-title.function_),
+:is(.unity-html, .unity-textile) :deep(.hljs-title.class_),
+:is(.unity-html, .unity-textile) :deep(.hljs-section) {
+	color: #6f42c1;
+}
+:is(.unity-html, .unity-textile) :deep(.hljs-attr),
+:is(.unity-html, .unity-textile) :deep(.hljs-attribute),
+:is(.unity-html, .unity-textile) :deep(.hljs-variable),
+:is(.unity-html, .unity-textile) :deep(.hljs-literal),
+:is(.unity-html, .unity-textile) :deep(.hljs-number),
+:is(.unity-html, .unity-textile) :deep(.hljs-operator),
+:is(.unity-html, .unity-textile) :deep(.hljs-selector-attr),
+:is(.unity-html, .unity-textile) :deep(.hljs-selector-class),
+:is(.unity-html, .unity-textile) :deep(.hljs-selector-id) {
+	color: #005cc5;
+}
+:is(.unity-html, .unity-textile) :deep(.hljs-string),
+:is(.unity-html, .unity-textile) :deep(.hljs-regexp) {
+	color: #032f62;
+}
+:is(.unity-html, .unity-textile) :deep(.hljs-built_in),
+:is(.unity-html, .unity-textile) :deep(.hljs-symbol) {
+	color: #e36209;
+}
+:is(.unity-html, .unity-textile) :deep(.hljs-comment),
+:is(.unity-html, .unity-textile) :deep(.hljs-quote),
+:is(.unity-html, .unity-textile) :deep(.hljs-meta) {
+	color: #6a737d;
+}
+@media (prefers-color-scheme: dark) {
+	:is(.unity-html, .unity-textile) :deep(.hljs-keyword),
+	:is(.unity-html, .unity-textile) :deep(.hljs-doctag),
+	:is(.unity-html, .unity-textile) :deep(.hljs-type),
+	:is(.unity-html, .unity-textile) :deep(.hljs-name),
+	:is(.unity-html, .unity-textile) :deep(.hljs-selector-tag) {
+		color: #ff7b72;
+	}
+	:is(.unity-html, .unity-textile) :deep(.hljs-title),
+	:is(.unity-html, .unity-textile) :deep(.hljs-title.function_),
+	:is(.unity-html, .unity-textile) :deep(.hljs-title.class_),
+	:is(.unity-html, .unity-textile) :deep(.hljs-section) {
+		color: #d2a8ff;
+	}
+	:is(.unity-html, .unity-textile) :deep(.hljs-attr),
+	:is(.unity-html, .unity-textile) :deep(.hljs-attribute),
+	:is(.unity-html, .unity-textile) :deep(.hljs-variable),
+	:is(.unity-html, .unity-textile) :deep(.hljs-literal),
+	:is(.unity-html, .unity-textile) :deep(.hljs-number),
+	:is(.unity-html, .unity-textile) :deep(.hljs-operator),
+	:is(.unity-html, .unity-textile) :deep(.hljs-selector-attr),
+	:is(.unity-html, .unity-textile) :deep(.hljs-selector-class),
+	:is(.unity-html, .unity-textile) :deep(.hljs-selector-id) {
+		color: #79c0ff;
+	}
+	:is(.unity-html, .unity-textile) :deep(.hljs-string),
+	:is(.unity-html, .unity-textile) :deep(.hljs-regexp) {
+		color: #a5d6ff;
+	}
+	:is(.unity-html, .unity-textile) :deep(.hljs-built_in),
+	:is(.unity-html, .unity-textile) :deep(.hljs-symbol) {
+		color: #ffa657;
+	}
+	:is(.unity-html, .unity-textile) :deep(.hljs-comment),
+	:is(.unity-html, .unity-textile) :deep(.hljs-quote),
+	:is(.unity-html, .unity-textile) :deep(.hljs-meta) {
+		color: #8b949e;
+	}
 }
 .unity-rendered :deep(blockquote) {
 	border-left: 4px solid var(--color-border-dark);
