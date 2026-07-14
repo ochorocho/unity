@@ -15,18 +15,26 @@
 		<NcLoadingIcon v-if="loading" :size="20" />
 		<ul v-else-if="attachments.length" class="unity-attachments-list">
 			<li v-for="a in attachments" :key="a.id" class="unity-attachment">
-				<a v-if="isImage(a)"
+				<a v-if="previewable(a)"
 					href="#"
 					class="unity-attachment-thumb"
-					:aria-label="a.filename"
-					@click.prevent="lightbox = a">
-					<img :src="thumbUrl(a)" :alt="a.filename">
+					:class="{ 'unity-attachment-thumb--icon': !isImage(a) }"
+					:aria-label="t('unity', 'Preview {name}', { name: a.filename })"
+					@click.prevent="preview = a">
+					<img v-if="isImage(a)" :src="thumbUrl(a)" :alt="a.filename">
+					<FilePdfBox v-else-if="isPdf(a)" :size="26" />
+					<FileIcon v-else :size="26" />
 				</a>
 				<span v-else class="unity-attachment-thumb unity-attachment-thumb--icon">
 					<FileIcon :size="26" />
 				</span>
 				<div class="unity-attachment-main">
-					<a :href="proxy(a.src)"
+					<a v-if="previewable(a)"
+						href="#"
+						class="unity-attachment-name"
+						@click.prevent="preview = a">{{ a.filename }}</a>
+					<a v-else
+						:href="proxy(a.src)"
 						:download="a.filename"
 						class="unity-attachment-name"
 						target="_blank"
@@ -56,12 +64,17 @@
 		</ul>
 		<p v-else class="unity-attachments-empty">{{ t('unity', 'No attachments.') }}</p>
 
-		<NcDialog v-if="lightbox"
-			:name="lightbox.filename"
+		<NcDialog v-if="preview"
+			:name="preview.filename"
 			size="large"
-			@closing="lightbox = null">
-			<div class="unity-lightbox">
-				<img :src="proxy(lightbox.src)" :alt="lightbox.filename">
+			@closing="preview = null">
+			<div class="unity-preview" :class="{ 'unity-preview--doc': isDocument(preview) }">
+				<img v-if="isImage(preview)" :src="proxy(preview.src)" :alt="preview.filename">
+				<!-- eslint-disable-next-line vue/html-self-closing -->
+				<video v-else-if="isVideo(preview)" :src="proxy(preview.src)" controls></video>
+				<!-- eslint-disable-next-line vue/html-self-closing -->
+				<audio v-else-if="isAudio(preview)" :src="proxy(preview.src)" controls></audio>
+				<iframe v-else :src="proxy(preview.src)" :title="preview.filename" class="unity-preview-frame" />
 			</div>
 		</NcDialog>
 	</div>
@@ -78,10 +91,11 @@ import Paperclip from 'vue-material-design-icons/Paperclip.vue'
 import Download from 'vue-material-design-icons/Download.vue'
 import Delete from 'vue-material-design-icons/Delete.vue'
 import FileIcon from 'vue-material-design-icons/File.vue'
+import FilePdfBox from 'vue-material-design-icons/FilePdfBox.vue'
 
 export default {
 	name: 'IssueAttachments',
-	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, Download, Delete, FileIcon },
+	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, Download, Delete, FileIcon, FilePdfBox },
 	props: {
 		issueRef: { type: String, required: true },
 		reloadKey: { type: Number, default: 0 },
@@ -93,12 +107,13 @@ export default {
 			loading: false,
 			uploading: false,
 			deletingId: null,
-			lightbox: null,
+			// The attachment currently open in the preview modal, or null.
+			preview: null,
 		}
 	},
 	watch: {
 		issueRef() {
-			this.lightbox = null
+			this.preview = null
 			this.fetch()
 		},
 		reloadKey() {
@@ -113,8 +128,31 @@ export default {
 			const ref = encodeURIComponent(this.issueRef)
 			return generateUrl('/apps/unity/issues/{ref}/file', { ref }) + '?src=' + encodeURIComponent(src)
 		},
+		mimeType(a) {
+			return typeof a.mimeType === 'string' ? a.mimeType : ''
+		},
 		isImage(a) {
-			return typeof a.mimeType === 'string' && a.mimeType.startsWith('image/')
+			return this.mimeType(a).startsWith('image/')
+		},
+		isVideo(a) {
+			return this.mimeType(a).startsWith('video/')
+		},
+		isAudio(a) {
+			return this.mimeType(a).startsWith('audio/')
+		},
+		isPdf(a) {
+			return this.mimeType(a) === 'application/pdf'
+		},
+		isText(a) {
+			return this.mimeType(a).startsWith('text/')
+		},
+		// PDF/text render in an iframe (the browser's built-in viewer).
+		isDocument(a) {
+			return this.isPdf(a) || this.isText(a)
+		},
+		// Types the browser can render inline in the preview modal.
+		previewable(a) {
+			return this.isImage(a) || this.isVideo(a) || this.isAudio(a) || this.isPdf(a) || this.isText(a)
 		},
 		thumbUrl(a) {
 			return this.proxy(a.thumbnailSrc || a.src)
@@ -305,14 +343,28 @@ export default {
 	font-size: 0.9em;
 	margin-top: 8px;
 }
-.unity-lightbox {
+.unity-preview {
 	display: flex;
 	justify-content: center;
 	padding: 12px;
 }
-.unity-lightbox img {
+.unity-preview img,
+.unity-preview video {
 	max-width: 100%;
 	max-height: 75vh;
 	object-fit: contain;
+}
+.unity-preview audio {
+	width: 100%;
+}
+/* PDF/text fill the dialog with the browser's own viewer. */
+.unity-preview--doc {
+	display: block;
+	padding: 0;
+}
+.unity-preview-frame {
+	width: 100%;
+	height: 75vh;
+	border: none;
 }
 </style>
