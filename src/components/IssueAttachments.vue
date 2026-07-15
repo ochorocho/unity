@@ -122,8 +122,22 @@ export default {
 	},
 	mounted() {
 		this.fetch()
+		// Own Escape while the preview is open so it closes the modal only — not the
+		// issue detail behind it (App.vue's global Escape handler closes that). Capture
+		// phase runs before the bubbling window listeners in App.vue and NcModal.
+		window.addEventListener('keydown', this.onPreviewKeydown, true)
+	},
+	beforeUnmount() {
+		window.removeEventListener('keydown', this.onPreviewKeydown, true)
 	},
 	methods: {
+		onPreviewKeydown(e) {
+			if (e.key === 'Escape' && this.preview) {
+				this.preview = null
+				e.stopPropagation()
+				e.preventDefault()
+			}
+		},
 		proxy(src) {
 			const ref = encodeURIComponent(this.issueRef)
 			return generateUrl('/apps/unity/issues/{ref}/file', { ref }) + '?src=' + encodeURIComponent(src)
