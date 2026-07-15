@@ -103,6 +103,17 @@ class AdfConverter {
 				return implode("\n", $items);
 			case 'listItem':
 				return $this->children($content, "\n");
+			case 'taskList':
+				$items = [];
+				foreach ($content as $item) {
+					if (is_array($item)) {
+						$items[] = trim($this->walk($item));
+					}
+				}
+				return implode("\n", $items);
+			case 'taskItem':
+				$mark = ($node['attrs']['state'] ?? '') === 'DONE' ? '[x]' : '[ ]';
+				return '- ' . $mark . ' ' . $this->children($content, '');
 			case 'codeBlock':
 				$lang = (string)($node['attrs']['language'] ?? '');
 				return '```' . $lang . "\n" . $this->children($content, '') . "\n```";
@@ -254,6 +265,13 @@ class AdfConverter {
 				return '<ol>' . $this->childrenHtml($content) . '</ol>';
 			case 'listItem':
 				return '<li>' . $this->childrenHtml($content) . '</li>';
+			case 'taskList':
+				return '<ul class="contains-task-list">' . $this->childrenHtml($content) . '</ul>';
+			case 'taskItem':
+				// Disabled to match GitLab/Asana; the frontend re-enables it when editable.
+				$checked = ($node['attrs']['state'] ?? '') === 'DONE' ? ' checked' : '';
+				return '<li class="task-list-item"><input type="checkbox" disabled' . $checked . '> '
+					. $this->childrenHtml($content) . '</li>';
 			case 'codeBlock':
 				$lang = (string)($node['attrs']['language'] ?? '');
 				$class = $lang !== '' ? ' class="language-' . $this->esc($lang) . '"' : '';
@@ -409,6 +427,7 @@ class AdfConverter {
 	 * @return array<string, mixed>
 	 */
 	public function fromMarkdown(string $text): array {
+		$this->localIdSeq = 0;
 		$lines = preg_split('/\r\n|\r|\n/', $text) ?: [];
 		$content = [];
 		$i = 0;
@@ -458,6 +477,21 @@ class AdfConverter {
 					$i++;
 				}
 				$content[] = $this->buildTable($rows);
+				continue;
+			}
+			// Task lists must be matched before the generic list matcher below, which
+			// would otherwise swallow `- [ ] foo` as an ordinary bullet.
+			if (preg_match('/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/', $line) === 1) {
+				$items = [];
+				while ($i < $n && preg_match('/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/', $lines[$i], $mm) === 1) {
+					$items[] = [
+						'type' => 'taskItem',
+						'attrs' => ['localId' => $this->localId(), 'state' => strtolower($mm[1]) === 'x' ? 'DONE' : 'TODO'],
+						'content' => $this->inline($mm[2]),
+					];
+					$i++;
+				}
+				$content[] = ['type' => 'taskList', 'attrs' => ['localId' => $this->localId()], 'content' => $items];
 				continue;
 			}
 			if (preg_match('/^\s*([-*+]|\d+\.)\s+(.*)$/', $line) === 1) {
@@ -614,5 +648,13 @@ class AdfConverter {
 	 */
 	private function emptyParagraph(): array {
 		return ['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => ' ']]];
+	}
+
+	/** Per-document counter feeding localId() so ids are unique within one fromMarkdown() run. */
+	private int $localIdSeq = 0;
+
+	/** ADF taskList/taskItem nodes require a localId; emit a document-unique, deterministic one. */
+	private function localId(): string {
+		return 'unity-' . (++$this->localIdSeq);
 	}
 }

@@ -256,4 +256,47 @@ class AdfConverterTest extends TestCase {
 		$this->assertStringContainsString('<ul><li><p>one</p></li></ul>', $html);
 		$this->assertStringContainsString('<pre><code class="language-php">&lt;x&gt;&amp;</code></pre>', $html);
 	}
+
+	private function taskListDoc(): array {
+		return ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'taskList', 'attrs' => ['localId' => 'l1'], 'content' => [
+				['type' => 'taskItem', 'attrs' => ['localId' => 't1', 'state' => 'TODO'], 'content' => [['type' => 'text', 'text' => 'a']]],
+				['type' => 'taskItem', 'attrs' => ['localId' => 't2', 'state' => 'DONE'], 'content' => [['type' => 'text', 'text' => 'b']]],
+			]],
+		]];
+	}
+
+	public function testToHtmlRendersTaskListAsInteractiveCheckboxes(): void {
+		// The frontend keys off `.task-list-item` + `<input type="checkbox">` to make these clickable.
+		$this->assertSame(
+			'<ul class="contains-task-list">'
+			. '<li class="task-list-item"><input type="checkbox" disabled> a</li>'
+			. '<li class="task-list-item"><input type="checkbox" disabled checked> b</li>'
+			. '</ul>',
+			$this->adf->toHtml($this->taskListDoc()),
+		);
+	}
+
+	public function testToTextRendersTaskListMarkers(): void {
+		// The raw markdown must carry `- [ ]` / `- [x]` so toggleTaskAt (frontend) can flip by index.
+		$this->assertSame("- [ ] a\n- [x] b", $this->adf->toText($this->taskListDoc()));
+	}
+
+	public function testFromMarkdownParsesTaskList(): void {
+		$adf = $this->adf->fromMarkdown("- [ ] a\n- [x] b");
+		$list = $adf['content'][0];
+		$this->assertSame('taskList', $list['type']);
+		$this->assertNotSame('', $list['attrs']['localId'] ?? '');
+		$this->assertSame('taskItem', $list['content'][0]['type']);
+		$this->assertSame('TODO', $list['content'][0]['attrs']['state']);
+		$this->assertSame('DONE', $list['content'][1]['attrs']['state']);
+		$this->assertNotSame('', $list['content'][0]['attrs']['localId'] ?? '');
+		$this->assertSame('a', $list['content'][0]['content'][0]['text']);
+	}
+
+	public function testTaskListRoundTrip(): void {
+		// A toggled body saved back to Jira must round-trip as a real ADF checklist, not literal [x] text.
+		$md = "- [ ] a\n- [x] b";
+		$this->assertSame($md, $this->adf->toText($this->adf->fromMarkdown($md)));
+	}
 }
