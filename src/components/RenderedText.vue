@@ -366,6 +366,27 @@ export default {
 	border: 1px solid var(--color-border);
 	padding: 4px 8px;
 }
+/* Restore list markers + indentation in the provider-HTML / textile branches
+   (Nextcloud's base CSS resets ul/ol); the NcRichText markdown branch styles itself. */
+:is(.unity-html, .unity-textile) :deep(ul),
+:is(.unity-html, .unity-textile) :deep(ol) {
+	padding-inline-start: 1.5em;
+	margin: 0 0 0.5em;
+}
+:is(.unity-html, .unity-textile) :deep(ul) {
+	list-style: disc;
+}
+:is(.unity-html, .unity-textile) :deep(ol) {
+	list-style: decimal;
+}
+:is(.unity-html, .unity-textile) :deep(li) {
+	margin: 0.15em 0;
+}
+/* Our ADF→HTML wraps each list item's text in a <p>; drop its block margins so
+   simple items stay on one line. */
+:is(.unity-html, .unity-textile) :deep(li > p:only-child) {
+	margin: 0;
+}
 .unity-rendered :deep(.task-list-item) {
 	list-style: none;
 }

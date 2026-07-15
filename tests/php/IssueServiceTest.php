@@ -138,6 +138,16 @@ class IssueServiceTest extends TestCase {
 		$this->service->deleteComment('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '5');
 	}
 
+	public function testAddCommentDecodesEditorEscapedAngleBrackets(): void {
+		$captured = null;
+		$this->client->method('addComment')->willReturnCallback(function ($conn, $parts, $body) use (&$captured): Comment {
+			$captured = $body;
+			return new Comment('1', 'Alice', null, $body, null);
+		});
+		$this->service->addComment('admin', Ref::encode('jira', 'c1', ['key' => 'ABC-1']), '&gt; Quote with &lt;tag&gt;');
+		$this->assertSame('> Quote with <tag>', $captured, 'editor-escaped < and > are restored before dispatch');
+	}
+
 	public function testMergesAndSortsByTitle(): void {
 		$this->client->method('search')->willReturn(new TrackerSearchResult([
 			$this->issue('ABC-2', 'Zebra', '2026-01-02'),

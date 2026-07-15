@@ -126,6 +126,9 @@ class IssueService {
 		if (trim((string)$target['title']) === '') {
 			throw new TrackerException('A title is required');
 		}
+		if (isset($target['description'])) {
+			$target['description'] = $this->decodeEditorEntities((string)$target['description']);
+		}
 		$issue = $client->createIssue($connection, $target);
 		// Invalidate cached lists so the new issue shows up immediately.
 		$this->bumpGeneration($userId);
@@ -142,16 +145,26 @@ class IssueService {
 
 	public function addComment(string $userId, string $ref, string $body): Comment {
 		[$client, $connection, $parts] = $this->resolve($userId, $ref);
-		$comment = $client->addComment($connection, $parts, $body);
+		$comment = $client->addComment($connection, $parts, $this->decodeEditorEntities($body));
 		$this->syncState->markTouched($userId, $ref);
 		return $comment;
 	}
 
 	public function updateComment(string $userId, string $ref, string $commentId, string $body): Comment {
 		[$client, $connection, $parts] = $this->resolve($userId, $ref);
-		$comment = $client->updateComment($connection, $parts, $commentId, $body);
+		$comment = $client->updateComment($connection, $parts, $commentId, $this->decodeEditorEntities($body));
 		$this->syncState->markTouched($userId, $ref);
 		return $comment;
+	}
+
+	/**
+	 * The rich-text editor (NcRichContenteditable) HTML-escapes `<` and `>` in its
+	 * value and doesn't decode them back, so a typed `>` arrives as the literal
+	 * `&gt;`. Restore them here so Markdown specials (blockquotes, `<…>` in code)
+	 * survive to the tracker. `&amp;`/`&nbsp;` are already decoded by the editor.
+	 */
+	private function decodeEditorEntities(string $text): string {
+		return str_replace(['&lt;', '&gt;'], ['<', '>'], $text);
 	}
 
 	/**
@@ -284,6 +297,9 @@ class IssueService {
 	 */
 	public function updateIssue(string $userId, string $ref, array $changes): Issue {
 		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		if (isset($changes['description'])) {
+			$changes['description'] = $this->decodeEditorEntities((string)$changes['description']);
+		}
 		$issue = $client->updateIssue($connection, $parts, $changes);
 		$this->syncState->markTouched($userId, $ref);
 		return $issue;

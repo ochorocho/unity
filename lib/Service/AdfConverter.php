@@ -128,9 +128,42 @@ class AdfConverter {
 				return (string)($node['attrs']['url'] ?? '');
 			case 'rule':
 				return '---';
+			case 'table':
+				return $this->tableToMarkdown($content);
 			default:
 				return $this->children($content, '');
 		}
+	}
+
+	/**
+	 * Render an ADF table's rows back to a GFM markdown table (first row = header).
+	 *
+	 * @param list<mixed> $rows tableRow nodes
+	 */
+	private function tableToMarkdown(array $rows): string {
+		$out = [];
+		foreach ($rows as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$cells = [];
+			foreach ((is_array($row['content'] ?? null) ? $row['content'] : []) as $cell) {
+				if (is_array($cell)) {
+					$cells[] = trim($this->children(is_array($cell['content'] ?? null) ? $cell['content'] : [], ''));
+				}
+			}
+			$out[] = $cells;
+		}
+		if ($out === []) {
+			return '';
+		}
+		$cols = count($out[0]);
+		$lines = ['| ' . implode(' | ', $out[0]) . ' |'];
+		$lines[] = '| ' . implode(' | ', array_fill(0, $cols, '---')) . ' |';
+		foreach (array_slice($out, 1) as $row) {
+			$lines[] = '| ' . implode(' | ', $row) . ' |';
+		}
+		return implode("\n", $lines);
 	}
 
 	private function renderText(array $node): string {
@@ -247,9 +280,49 @@ class AdfConverter {
 				return $url !== '' ? '<a href="' . $this->esc($url) . '">' . $this->esc($url) . '</a>' : '';
 			case 'rule':
 				return '<hr>';
+			case 'table':
+				return $this->tableToHtml($content);
 			default:
 				return $this->childrenHtml($content);
 		}
+	}
+
+	/**
+	 * @param list<mixed> $rows tableRow nodes
+	 */
+	private function tableToHtml(array $rows): string {
+		$html = '<table>';
+		foreach ($rows as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$html .= '<tr>';
+			foreach ((is_array($row['content'] ?? null) ? $row['content'] : []) as $cell) {
+				if (!is_array($cell)) {
+					continue;
+				}
+				$tag = ($cell['type'] ?? '') === 'tableHeader' ? 'th' : 'td';
+				$html .= '<' . $tag . '>'
+					. $this->cellHtml(is_array($cell['content'] ?? null) ? $cell['content'] : [])
+					. '</' . $tag . '>';
+			}
+			$html .= '</tr>';
+		}
+		return $html . '</table>';
+	}
+
+	/** Render a table cell's content inline, unwrapping the single wrapping paragraph. */
+	private function cellHtml(array $content): string {
+		$out = '';
+		foreach ($content as $node) {
+			if (!is_array($node)) {
+				continue;
+			}
+			$out .= ($node['type'] ?? '') === 'paragraph'
+				? $this->childrenHtml(is_array($node['content'] ?? null) ? $node['content'] : [])
+				: $this->walkHtml($node);
+		}
+		return $out;
 	}
 
 	private function renderTextHtml(array $node): string {
@@ -330,7 +403,8 @@ class AdfConverter {
 
 	/**
 	 * Parse a Markdown subset (headings, bold/italic/code/strike, links, code
-	 * blocks, bullet/ordered lists, blockquotes) into an ADF document.
+	 * blocks, bullet/ordered lists, blockquotes, GFM tables, @mentions) into an ADF
+	 * document.
 	 *
 	 * @return array<string, mixed>
 	 */
@@ -376,6 +450,16 @@ class AdfConverter {
 				$content[] = ['type' => 'blockquote', 'content' => [['type' => 'paragraph', 'content' => $this->inline(implode("\n", $quote))]]];
 				continue;
 			}
+			if ($this->isTableAt($lines, $i)) {
+				$rows = [$this->tableCells($lines[$i])];
+				$i += 2; // skip the header row and the delimiter row
+				while ($i < $n && trim($lines[$i]) !== '' && str_contains($lines[$i], '|')) {
+					$rows[] = $this->tableCells($lines[$i]);
+					$i++;
+				}
+				$content[] = $this->buildTable($rows);
+				continue;
+			}
 			if (preg_match('/^\s*([-*+]|\d+\.)\s+(.*)$/', $line) === 1) {
 				$ordered = null;
 				$items = [];
@@ -395,7 +479,8 @@ class AdfConverter {
 			}
 			$para = [];
 			while ($i < $n && trim($lines[$i]) !== ''
-				&& preg_match('/^(#{1,6}\s|>|```|\s*([-*+]|\d+\.)\s)/', $lines[$i]) !== 1) {
+				&& preg_match('/^(#{1,6}\s|>|```|\s*([-*+]|\d+\.)\s)/', $lines[$i]) !== 1
+				&& !$this->isTableAt($lines, $i)) {
 				$para[] = $lines[$i];
 				$i++;
 			}
@@ -403,6 +488,56 @@ class AdfConverter {
 		}
 
 		return ['type' => 'doc', 'version' => 1, 'content' => $content !== [] ? $content : [$this->emptyParagraph()]];
+	}
+
+	/**
+	 * A GFM pipe table starts at line $i if it has a pipe and the next line is a
+	 * delimiter row (dashes/colons separated by pipes).
+	 *
+	 * @param list<string> $lines
+	 */
+	private function isTableAt(array $lines, int $i): bool {
+		return $i + 1 < count($lines)
+			&& str_contains($lines[$i], '|')
+			&& preg_match('/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/', $lines[$i + 1]) === 1;
+	}
+
+	/**
+	 * Split a table row into trimmed cells, dropping the optional outer pipes.
+	 *
+	 * @return list<string>
+	 */
+	private function tableCells(string $line): array {
+		$line = preg_replace('/^\s*\||\|\s*$/', '', trim($line)) ?? '';
+		return array_map('trim', explode('|', $line));
+	}
+
+	/**
+	 * Build an ADF table node from parsed rows; the first row is the header.
+	 *
+	 * @param list<list<string>> $rows
+	 * @return array<string, mixed>
+	 */
+	private function buildTable(array $rows): array {
+		$tableRows = [];
+		foreach ($rows as $r => $cells) {
+			$cellType = $r === 0 ? 'tableHeader' : 'tableCell';
+			$cellNodes = [];
+			foreach ($cells as $cell) {
+				// No `attrs` key: cell attrs are optional in ADF, and an empty PHP
+				// array would JSON-encode to `[]` (an array), which Jira rejects.
+				$cellNodes[] = [
+					'type' => $cellType,
+					'content' => [['type' => 'paragraph', 'content' => $this->inline($cell)]],
+				];
+			}
+			$tableRows[] = ['type' => 'tableRow', 'content' => $cellNodes];
+		}
+		return [
+			'type' => 'table',
+			'attrs' => ['isNumberColumnEnabled' => false, 'layout' => 'default'],
+			'content' => $tableRows,
+		];
 	}
 
 	/**

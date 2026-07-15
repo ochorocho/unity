@@ -39,7 +39,7 @@
 		</div>
 
 		<div v-show="tab === 'preview'" class="unity-editor-preview">
-			<RenderedText v-if="modelValue" :text="modelValue" :format="previewFormat" :issue-ref="issueRef" />
+			<RenderedText v-if="modelValue" :text="previewText" :format="previewFormat" :issue-ref="issueRef" />
 			<p v-else class="unity-editor-empty">{{ t('unity', 'Nothing to preview') }}</p>
 		</div>
 	</div>
@@ -92,6 +92,11 @@ export default {
 		}
 	},
 	computed: {
+		// NcRichContenteditable leaves `<`/`>` HTML-escaped in its value; decode them
+		// for Preview so it matches the saved result (the backend does the same on save).
+		previewText() {
+			return this.modelValue.replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+		},
 		// Preview must match how the saved body is displayed, so an HTML body
 		// (e.g. Jira Server/DC) renders as HTML instead of showing raw tags.
 		previewFormat() {

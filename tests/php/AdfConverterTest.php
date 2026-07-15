@@ -105,6 +105,37 @@ class AdfConverterTest extends TestCase {
 		$this->assertSame('Hello world', $this->adf->toText($this->adf->fromText('Hello world')));
 	}
 
+	public function testFromMarkdownParsesTable(): void {
+		$adf = $this->adf->fromMarkdown("| Column | Other |\n| --- | --- |\n| a | b |");
+		$table = $adf['content'][0];
+		$this->assertSame('table', $table['type']);
+		$this->assertCount(2, $table['content'], 'header row + one body row');
+		$this->assertSame('tableHeader', $table['content'][0]['content'][0]['type']);
+		$this->assertSame('Column', $table['content'][0]['content'][0]['content'][0]['content'][0]['text']);
+		$this->assertSame('tableCell', $table['content'][1]['content'][0]['type']);
+		$this->assertSame('a', $table['content'][1]['content'][0]['content'][0]['content'][0]['text']);
+	}
+
+	public function testTableRoundTripsToMarkdownAndHtml(): void {
+		$adf = $this->adf->fromMarkdown("| A | B |\n| --- | --- |\n| 1 | 2 |");
+		$md = $this->adf->toText($adf);
+		$this->assertStringContainsString('| A | B |', $md);
+		$this->assertStringContainsString('| --- | --- |', $md);
+		$this->assertStringContainsString('| 1 | 2 |', $md);
+
+		$html = $this->adf->toHtml($adf);
+		$this->assertStringContainsString('<table><tr><th>A</th><th>B</th></tr>', $html);
+		$this->assertStringContainsString('<tr><td>1</td><td>2</td></tr></table>', $html);
+	}
+
+	public function testTableAdfHasNoArrayTypedAttrs(): void {
+		// Jira rejects `"attrs":[]` (a JSON array) with HTTP 400 INVALID_INPUT;
+		// table attrs must be an object and cell attrs must be omitted.
+		$json = (string)json_encode($this->adf->fromMarkdown("| A | B |\n| --- | --- |\n| 1 | 2 |"));
+		$this->assertStringNotContainsString('"attrs":[]', $json);
+		$this->assertStringContainsString('"attrs":{"isNumberColumnEnabled":false,"layout":"default"}', $json);
+	}
+
 	public function testFromEmptyTextStillValid(): void {
 		$adf = $this->adf->fromText('');
 		$this->assertSame('doc', $adf['type']);
