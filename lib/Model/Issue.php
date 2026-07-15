@@ -41,6 +41,14 @@ class Issue implements JsonSerializable {
 		 * used for editing. Only populated for the single-issue view.
 		 */
 		public ?string $renderedDescription = null,
+		/**
+		 * Mentions in `description`, as `{id, label}` (canonical `mention:<handle>`
+		 * token id + display name), so the mention editor renders existing mentions
+		 * as pills when editing the description. Only populated for the detail view.
+		 *
+		 * @var list<array{id: string, label: string}>
+		 */
+		public array $mentions = [],
 	) {
 	}
 
@@ -74,6 +82,7 @@ class Issue implements JsonSerializable {
 			isset($a['timeSpentSeconds']) ? (int)$a['timeSpentSeconds'] : null,
 			(string)($a['bodyFormat'] ?? 'plaintext'),
 			isset($a['renderedDescription']) ? (string)$a['renderedDescription'] : null,
+			is_array($a['mentions'] ?? null) ? array_values($a['mentions']) : [],
 		);
 	}
 }

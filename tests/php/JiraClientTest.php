@@ -209,6 +209,73 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('Nice', $comment->body);
 	}
 
+	public function testAddCommentCloudEmitsAdfMentionNode(): void {
+		$captured = null;
+		$this->httpClient->method('request')
+			->willReturnCallback(function (string $method, string $url, array $options) use (&$captured): IResponse {
+				$captured = $options;
+				return $this->response(201, [
+					'id' => '5', 'author' => ['displayName' => 'A'], 'created' => '2026-03-01T10:00:00.000+0000',
+					'body' => ['type' => 'doc', 'version' => 1, 'content' => []],
+				]);
+			});
+		$this->jira->addComment($this->connection, ['key' => 'ABC-1'], 'hi @"user/557058:abc" there');
+		$nodes = json_decode($captured['body'], true)['body']['content'][0]['content'];
+		$mention = null;
+		foreach ($nodes as $node) {
+			if (($node['type'] ?? '') === 'mention') {
+				$mention = $node;
+			}
+		}
+		$this->assertNotNull($mention);
+		$this->assertSame('557058:abc', $mention['attrs']['id']);
+	}
+
+	public function testAddCommentCloudReturnsEditableCommentWithMentionTokens(): void {
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o): IResponse {
+			return $this->response(201, [
+				'id' => '5', 'author' => ['displayName' => 'A'], 'created' => '2026-03-01T10:00:00.000+0000',
+				'body' => ['type' => 'doc', 'version' => 1, 'content' => [
+					['type' => 'paragraph', 'content' => [
+						['type' => 'text', 'text' => 'hi '],
+						['type' => 'mention', 'attrs' => ['id' => '557058:abc', 'text' => '@Jochen Roth']],
+					]],
+				]],
+			]);
+		});
+		$comment = $this->jira->addComment($this->connection, ['key' => 'ABC-1'], 'x');
+		$this->assertTrue($comment->editable, 'a just-added comment is editable without a reload');
+		$this->assertTrue($comment->deletable);
+		$this->assertSame('hi @"user/557058:abc"', $comment->body, 'editor body uses the token form');
+		$this->assertSame([['id' => 'user/557058:abc', 'label' => 'Jochen Roth']], $comment->mentions);
+		$this->assertStringContainsString('class="unity-mention"', (string)$comment->renderedBody);
+	}
+
+	public function testAddCommentServerConvertsMentionToWikiMarkup(): void {
+		$captured = null;
+		$this->dispatch('Server', [
+			'id' => '5', 'author' => ['displayName' => 'A'], 'created' => '2026-03-01T10:00:00.000+0000',
+			'body' => 'ping [~jdoe] now',
+		], function (array $req) use (&$captured): void {
+			$captured = $req['options'];
+		});
+		$this->jira->addComment($this->serverConnection(), ['key' => 'ABC-1'], 'ping @"user/jdoe" now');
+		$this->assertSame('ping [~jdoe] now', json_decode($captured['body'], true)['body']);
+	}
+
+	public function testServerCommentRendersMentionAsProfileLink(): void {
+		$this->dispatch('Server', [
+			'id' => '5', 'author' => ['displayName' => 'A'], 'created' => '2026-03-01T10:00:00.000+0000',
+			'body' => 'ping [~jdoe] now',
+		]);
+		$comment = $this->jira->addComment($this->serverConnection(), ['key' => 'ABC-1'], 'x');
+		$this->assertStringContainsString(
+			'<a class="unity-mention" href="https://pro.example.com/secure/ViewProfile.jspa?name=jdoe">jdoe</a>',
+			(string)$comment->renderedBody,
+		);
+		$this->assertSame('ping [~jdoe] now', $comment->body, 'raw wiki kept for editing');
+	}
+
 	public function testRetriesOnce(): void {
 		$this->httpClient->expects($this->exactly(2))
 			->method('request')

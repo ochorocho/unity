@@ -125,17 +125,77 @@ class JiraClient extends AbstractTrackerClient {
 		return $this->isServer($connection) ? 'html' : 'markdown';
 	}
 
-	/** Decode a Jira body field to display text (ADF on Cloud, wiki-markup string on Server). */
-	private function decodeBody(Connection $connection, mixed $raw): string {
+	/**
+	 * Decode a Jira body field to display text (ADF on Cloud, wiki-markup string on
+	 * Server). With $mentionAsToken, Cloud mentions render as the `@mention:<id>`
+	 * editor token (for the editable body) instead of the display `@Name`.
+	 */
+	private function decodeBody(Connection $connection, mixed $raw, bool $mentionAsToken = false): string {
 		if ($this->isServer($connection)) {
 			return is_string($raw) ? $raw : '';
 		}
-		return $this->adf->toText($raw);
+		return $this->adf->toText($raw, $mentionAsToken);
+	}
+
+	/**
+	 * Mentions in a Jira body, as `{id, label}` for the editor's userData. Cloud
+	 * ADF only; Server wiki markup has no structured mentions here.
+	 *
+	 * @return list<array{id: string, label: string}>
+	 */
+	private function bodyMentions(Connection $connection, mixed $raw): array {
+		return $this->isServer($connection) ? [] : $this->adf->extractMentions($raw);
+	}
+
+	/**
+	 * Rendered HTML for display of a Jira body, with mentions as profile-linked
+	 * pills. On Cloud the ADF is rendered to HTML. On Server the body is wiki
+	 * markup; we only rewrite its `[~username]` mention tokens into pill links and
+	 * leave the rest to the 'html' body format (returns null when there are none,
+	 * so mention-free Server bodies keep their existing rendering path).
+	 */
+	private function renderedBody(Connection $connection, mixed $raw): ?string {
+		if ($raw === null) {
+			return null;
+		}
+		$base = rtrim($connection->baseUrl, '/');
+		if ($this->isServer($connection)) {
+			return $this->linkServerMentions(is_string($raw) ? $raw : '', $base);
+		}
+		return $this->adf->toHtml(
+			$raw,
+			// Jira Cloud user profile: https://<site>.atlassian.net/jira/people/<accountId>
+			static fn (string $accountId): ?string => $accountId !== '' ? $base . '/jira/people/' . rawurlencode($accountId) : null,
+		);
+	}
+
+	/**
+	 * Rewrite Jira Server wiki mention tokens (`[~username]`) into profile-linked
+	 * mention pills, leaving the rest of the body untouched. Returns null when the
+	 * body has no mention token, so mention-free bodies keep the plain 'html' path.
+	 */
+	private function linkServerMentions(string $body, string $base): ?string {
+		$linked = preg_replace_callback(
+			'/\[~([^\]\s]+)\]/',
+			static function (array $m) use ($base): string {
+				// Jira Server/DC user profile: /secure/ViewProfile.jspa?name=<username>
+				$url = $base . '/secure/ViewProfile.jspa?name=' . rawurlencode($m[1]);
+				return '<a class="unity-mention" href="' . htmlspecialchars($url, ENT_QUOTES) . '">'
+					. htmlspecialchars($m[1], ENT_QUOTES) . '</a>';
+			},
+			$body,
+		) ?? $body;
+		return $linked !== $body ? $linked : null;
 	}
 
 	/** Encode user text to a Jira body value (ADF document on Cloud, plain string on Server). */
 	private function encodeBody(Connection $connection, string $text): mixed {
-		return $this->isServer($connection) ? $text : $this->adf->fromMarkdown($text);
+		if ($this->isServer($connection)) {
+			// Server/DC wiki markup mentions users as [~username].
+			return $this->replaceMentionTokens($text, static fn (string $h): string => '[~' . $h . ']');
+		}
+		// Cloud: AdfConverter emits ADF mention nodes from the canonical tokens.
+		return $this->adf->fromMarkdown($text);
 	}
 
 	public function testConnection(Connection $connection): array {
@@ -243,6 +303,10 @@ class JiraClient extends AbstractTrackerClient {
 	}
 
 	public function supportsAttachments(): bool {
+		return true;
+	}
+
+	public function supportsMentions(): bool {
 		return true;
 	}
 
@@ -494,15 +558,18 @@ class JiraClient extends AbstractTrackerClient {
 			// comment author may edit/delete it.
 			$authorKey = $server ? (string)($raw['author']['name'] ?? '') : (string)($raw['author']['accountId'] ?? '');
 			$own = $me !== '' && $authorKey === $me;
-			$comments[] = new Comment(
+			$comment = new Comment(
 				(string)($raw['id'] ?? ''),
 				(string)($raw['author']['displayName'] ?? ''),
 				$raw['author']['avatarUrls']['48x48'] ?? null,
-				$this->decodeBody($connection, $raw['body'] ?? null),
+				$this->decodeBody($connection, $raw['body'] ?? null, mentionAsToken: true),
 				$raw['created'] ?? null,
 				editable: $own,
 				deletable: $own,
+				mentions: $this->bodyMentions($connection, $raw['body'] ?? null),
 			);
+			$comment->renderedBody = $this->renderedBody($connection, $raw['body'] ?? null);
+			$comments[] = $comment;
 		}
 		return $comments;
 	}
@@ -514,13 +581,19 @@ class JiraClient extends AbstractTrackerClient {
 			'body' => json_encode(['body' => $this->encodeBody($connection, $body)]),
 		], $connection);
 		$raw = $this->json($response, 'Add comment');
-		return new Comment(
+		$comment = new Comment(
 			(string)($raw['id'] ?? ''),
 			(string)($raw['author']['displayName'] ?? ''),
 			$raw['author']['avatarUrls']['48x48'] ?? null,
-			$this->decodeBody($connection, $raw['body'] ?? null),
+			$this->decodeBody($connection, $raw['body'] ?? null, mentionAsToken: true),
 			$raw['created'] ?? null,
+			// The current user just authored it, so it is theirs to edit/delete.
+			editable: true,
+			deletable: true,
+			mentions: $this->bodyMentions($connection, $raw['body'] ?? null),
 		);
+		$comment->renderedBody = $this->renderedBody($connection, $raw['body'] ?? null);
+		return $comment;
 	}
 
 	public function updateComment(Connection $connection, array $refParts, string $commentId, string $body): Comment {
@@ -532,13 +605,18 @@ class JiraClient extends AbstractTrackerClient {
 			], $connection),
 			'Update comment',
 		);
-		return new Comment(
+		$comment = new Comment(
 			(string)($raw['id'] ?? $commentId),
 			(string)($raw['author']['displayName'] ?? ''),
 			$raw['author']['avatarUrls']['48x48'] ?? null,
-			$this->decodeBody($connection, $raw['body'] ?? null),
+			$this->decodeBody($connection, $raw['body'] ?? null, mentionAsToken: true),
 			$raw['created'] ?? null,
+			editable: true,
+			deletable: true,
+			mentions: $this->bodyMentions($connection, $raw['body'] ?? null),
 		);
+		$comment->renderedBody = $this->renderedBody($connection, $raw['body'] ?? null);
+		return $comment;
 	}
 
 	public function deleteComment(Connection $connection, array $refParts, string $commentId): void {
@@ -1433,7 +1511,7 @@ class JiraClient extends AbstractTrackerClient {
 	private function normalizeIssue(Connection $connection, array $raw): Issue {
 		$fields = is_array($raw['fields'] ?? null) ? $raw['fields'] : [];
 		$key = (string)($raw['key'] ?? '');
-		$description = $this->decodeBody($connection, $fields['description'] ?? null);
+		$description = $this->decodeBody($connection, $fields['description'] ?? null, mentionAsToken: true);
 		$labels = [];
 		foreach (($fields['labels'] ?? []) as $label) {
 			if (is_string($label)) {
@@ -1460,6 +1538,8 @@ class JiraClient extends AbstractTrackerClient {
 			rtrim($connection->baseUrl, '/') . '/browse/' . $key,
 			is_int($timeSpent) ? $timeSpent : null,
 			$this->bodyFormat($connection),
+			renderedDescription: $this->renderedBody($connection, $fields['description'] ?? null),
+			mentions: $this->bodyMentions($connection, $fields['description'] ?? null),
 		);
 	}
 }

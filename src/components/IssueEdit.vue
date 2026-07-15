@@ -4,7 +4,7 @@
 		<NcTextField v-model="form.title" :label="t('unity', 'Title')" />
 
 		<label class="unity-edit-label">{{ t('unity', 'Description') }}</label>
-		<MarkupEditor v-model="form.description" :format="issue.bodyFormat" :issue-ref="issue.ref" :tracker="issue.tracker" :rows="8" />
+		<MarkupEditor v-model="form.description" :format="issue.bodyFormat" :issue-ref="issue.ref" :tracker="issue.tracker" :mentions="issue.mentions || []" :rows="8" />
 
 		<template v-if="meta">
 			<div v-if="meta.capabilities.type && types.length" class="unity-edit-field">

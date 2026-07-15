@@ -217,4 +217,25 @@ class AsanaHtmlConverterTest extends TestCase {
 			$this->assertSame($markdown, $this->conv->toText($this->conv->fromMarkdown($markdown)), 'round trip: ' . $markdown);
 		}
 	}
+
+	public function testFromMarkdownEmitsMentionAnchor(): void {
+		$html = $this->conv->fromMarkdown('ping @"user/1203456789" please', false);
+		$this->assertStringContainsString('<a data-asana-gid="1203456789"/>', $html);
+		$this->assertStringNotContainsString('user/', $html);
+	}
+
+	public function testFromMarkdownIgnoresPlainAtWord(): void {
+		$html = $this->conv->fromMarkdown('ping @someone please', false);
+		$this->assertStringNotContainsString('data-asana-gid', $html);
+	}
+
+	public function testToRenderedHtmlAddsProfileHrefToMention(): void {
+		$out = $this->conv->toRenderedHtml('<body>hi <a data-asana-gid="12345">Jane</a></body>');
+		$this->assertStringContainsString('<a href="https://app.asana.com/0/profile/12345" data-asana-gid="12345">Jane</a>', $out);
+	}
+
+	public function testToRenderedHtmlKeepsExistingHref(): void {
+		$in = '<a href="https://example.test/x" data-asana-gid="12345">Jane</a>';
+		$this->assertStringContainsString($in, $this->conv->toRenderedHtml($in));
+	}
 }

@@ -141,7 +141,17 @@ class GitLabClient extends AbstractTrackerClient {
 		return $comments;
 	}
 
+	public function supportsMentions(): bool {
+		return true;
+	}
+
+	/** Rewrite canonical @mention tokens to GitLab's native `@username` form. */
+	private function mentions(string $text): string {
+		return $this->replaceMentionTokens($text, static fn (string $h): string => '@' . $h);
+	}
+
 	public function addComment(Connection $connection, array $refParts, string $body): Comment {
+		$body = $this->mentions($body);
 		$raw = $this->json(
 			$this->request('POST', $this->issueUrl($connection, $refParts) . '/notes', [
 				'headers' => $this->defaultHeaders($connection),
@@ -156,6 +166,9 @@ class GitLabClient extends AbstractTrackerClient {
 			$raw['author']['avatar_url'] ?? null,
 			$newBody,
 			$raw['created_at'] ?? null,
+			// The current user just authored it, so it is theirs to edit/delete.
+			editable: true,
+			deletable: true,
 		);
 		$comment->renderedBody = $this->renderMarkdown($connection, $newBody, (string)($refParts['path'] ?? ''));
 		return $comment;
@@ -172,6 +185,7 @@ class GitLabClient extends AbstractTrackerClient {
 	}
 
 	public function updateComment(Connection $connection, array $refParts, string $commentId, string $body): Comment {
+		$body = $this->mentions($body);
 		$raw = $this->json(
 			$this->request('PUT', $this->issueUrl($connection, $refParts) . '/notes/' . rawurlencode($commentId), [
 				'headers' => $this->defaultHeaders($connection),
@@ -186,6 +200,8 @@ class GitLabClient extends AbstractTrackerClient {
 			$raw['author']['avatar_url'] ?? null,
 			$newBody,
 			$raw['created_at'] ?? null,
+			editable: true,
+			deletable: true,
 		);
 		$comment->renderedBody = $this->renderMarkdown($connection, $newBody, (string)($refParts['path'] ?? ''));
 		return $comment;
@@ -206,7 +222,7 @@ class GitLabClient extends AbstractTrackerClient {
 			$body['title'] = (string)$changes['title'];
 		}
 		if (array_key_exists('description', $changes)) {
-			$body['description'] = (string)$changes['description'];
+			$body['description'] = $this->mentions((string)$changes['description']);
 		}
 		if (array_key_exists('status', $changes)) {
 			$status = (string)$changes['status'];
@@ -289,7 +305,7 @@ class GitLabClient extends AbstractTrackerClient {
 		}
 		$body = [
 			'title' => (string)$target['title'],
-			'description' => (string)($target['description'] ?? ''),
+			'description' => $this->mentions((string)($target['description'] ?? '')),
 		];
 		$assignee = (string)($target['assignee'] ?? '');
 		if ($assignee !== '') {
@@ -385,7 +401,13 @@ class GitLabClient extends AbstractTrackerClient {
 		$out = [];
 		foreach ($members as $member) {
 			if (is_array($member) && isset($member['id'])) {
-				$out[] = ['id' => (string)$member['id'], 'name' => (string)($member['name'] ?? $member['username'] ?? '')];
+				// `id` is the numeric member id used for assignment; `mention` is the
+				// @username handle GitLab resolves in comment/description bodies.
+				$entry = ['id' => (string)$member['id'], 'name' => (string)($member['name'] ?? $member['username'] ?? '')];
+				if (isset($member['username']) && (string)$member['username'] !== '') {
+					$entry['mention'] = (string)$member['username'];
+				}
+				$out[] = $entry;
 			}
 		}
 		return $out;

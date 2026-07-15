@@ -177,7 +177,7 @@ class AsanaHtmlConverter {
 	}
 
 	private function inlineSegment(string $text): string {
-		$pattern = '/(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*]+\*)|(_[^_]+_)/';
+		$pattern = '/(@"user\/[^"]+")|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*]+\*)|(_[^_]+_)/';
 		$out = '';
 		$offset = 0;
 		while (preg_match($pattern, $text, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
@@ -196,6 +196,11 @@ class AsanaHtmlConverter {
 	}
 
 	private function inlineToken(string $tok): string {
+		if (preg_match('/^@"user\/([^"]+)"$/', $tok, $m) === 1) {
+			// Asana resolves the user from the gid; a self-closing anchor is the
+			// documented html_text mention form and is valid XML.
+			return '<a data-asana-gid="' . $this->escape($m[1]) . '"/>';
+		}
 		if (preg_match('/^`(.+)`$/s', $tok, $m) === 1) {
 			return '<code>' . $this->escape($m[1]) . '</code>';
 		}
@@ -250,17 +255,24 @@ class AsanaHtmlConverter {
 	 * Transform stored Asana rich HTML into display HTML for the unity renderer:
 	 * literal task-list markers ("[ ]" / "[x]" at the start of a <li>) become the
 	 * GitLab-style disabled-checkbox markup the frontend already renders and
-	 * toggles (.task-list-item + <input type="checkbox">). Everything else passes
-	 * through unchanged. Asana has no rich-text checkbox, so the stored form stays
-	 * "[ ] text"; this only affects how it is displayed.
+	 * toggles (.task-list-item + <input type="checkbox">), and user mentions
+	 * (`<a data-asana-gid="gid">`) get a profile href so the rendered pill links to
+	 * the user. Everything else passes through unchanged. Asana has no rich-text
+	 * checkbox, so the stored form stays "[ ] text"; this only affects display.
 	 */
 	public function toRenderedHtml(string $html): string {
-		return preg_replace_callback(
+		$html = preg_replace_callback(
 			'/<li>\[([ xX])\]\s+/',
 			static function (array $m): string {
 				$checked = $m[1] === ' ' ? '' : ' checked';
 				return '<li class="task-list-item"><input type="checkbox" disabled' . $checked . '> ';
 			},
+			$html,
+		) ?? $html;
+		// Give mention anchors that lack an href a link to the user's Asana profile.
+		return preg_replace_callback(
+			'/<a\b(?![^>]*\shref=)([^>]*\bdata-asana-gid="([^"]+)"[^>]*)>/i',
+			static fn (array $m): string => '<a href="https://app.asana.com/0/profile/' . $m[2] . '"' . $m[1] . '>',
 			$html,
 		) ?? $html;
 	}

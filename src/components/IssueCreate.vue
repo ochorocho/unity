@@ -67,6 +67,8 @@
 						<MarkupEditor v-model="description"
 							:format="bodyFormat"
 							:tracker="selectedTracker"
+							:connection="connectionId"
+							:project="projectId"
 							:rows="6" />
 					</div>
 

@@ -23,14 +23,55 @@ class AdfConverter {
 
 	// --- ADF -> Markdown -----------------------------------------------------
 
+	/** When true, walk() renders mentions as the editor token @"user/<id>", not @Name. */
+	private bool $mentionAsToken = false;
+
 	/**
 	 * @param mixed $node an ADF document (array) — anything else yields ''
+	 * @param bool $mentionAsToken emit mentions as the `@"user/<accountId>"` editor
+	 *                             token (for loading into the mention editor) instead of the display `@Name`
 	 */
-	public function toText(mixed $node): string {
+	public function toText(mixed $node, bool $mentionAsToken = false): string {
 		if (!is_array($node)) {
 			return '';
 		}
+		$this->mentionAsToken = $mentionAsToken;
 		return trim($this->walk($node));
+	}
+
+	/**
+	 * Collect the document's mentions as `{id, label}` for the editor's userData —
+	 * `id` is the canonical `user/<accountId>` token id, `label` the display name.
+	 *
+	 * @param mixed $node an ADF document (array) — anything else yields []
+	 * @return list<array{id: string, label: string}>
+	 */
+	public function extractMentions(mixed $node): array {
+		$out = [];
+		if (is_array($node)) {
+			$this->collectMentions($node, $out);
+		}
+		return $out;
+	}
+
+	/**
+	 * @param array<mixed> $node
+	 * @param list<array{id: string, label: string}> $out
+	 */
+	private function collectMentions(array $node, array &$out): void {
+		if (($node['type'] ?? '') === 'mention') {
+			$id = (string)($node['attrs']['id'] ?? '');
+			if ($id !== '') {
+				$label = ltrim((string)($node['attrs']['text'] ?? ''), '@');
+				$out[] = ['id' => 'user/' . $id, 'label' => $label !== '' ? $label : $id];
+			}
+			return;
+		}
+		foreach ((is_array($node['content'] ?? null) ? $node['content'] : []) as $child) {
+			if (is_array($child)) {
+				$this->collectMentions($child, $out);
+			}
+		}
 	}
 
 	private function walk(array $node): string {
@@ -68,7 +109,19 @@ class AdfConverter {
 			case 'blockquote':
 				return '> ' . str_replace("\n", "\n> ", trim($this->children($content, "\n")));
 			case 'mention':
-				return '@' . (string)($node['attrs']['text'] ?? $node['attrs']['id'] ?? '');
+				$id = (string)($node['attrs']['id'] ?? '');
+				// For the editor, emit the canonical token so it renders as a pill.
+				if ($this->mentionAsToken && $id !== '') {
+					return '@"user/' . $id . '"';
+				}
+				// Jira hydrates a mention's `text` to the display name *including* the
+				// leading '@' (e.g. "@Jochen Roth"); only add one when it's missing so
+				// we don't render "@@Jochen Roth".
+				$label = (string)($node['attrs']['text'] ?? '');
+				if ($label === '') {
+					$label = $id;
+				}
+				return str_starts_with($label, '@') ? $label : '@' . $label;
 			case 'emoji':
 				return (string)($node['attrs']['shortName'] ?? $node['attrs']['text'] ?? '');
 			case 'inlineCard':
@@ -120,6 +173,140 @@ class AdfConverter {
 			}
 		}
 		return implode($separator, $parts);
+	}
+
+	// --- ADF -> HTML ---------------------------------------------------------
+
+	/** Optional builder turning a mention accountId into a profile URL, set per toHtml() call. */
+	private ?\Closure $mentionUrl = null;
+
+	/**
+	 * Render an ADF document to sanitizer-safe HTML for display. Mirrors toText()'s
+	 * node coverage but emits HTML, and renders mentions as a styled pill so they
+	 * read like the editor's mention chips instead of plain "@Name" text. When
+	 * `$mentionUrl` is given and returns a URL for a mention's id, the pill becomes
+	 * a link to that user's profile. The raw `body`/`description` stays Markdown
+	 * (from toText) for editing; this only powers the rendered view.
+	 *
+	 * @param mixed $node an ADF document (array) — anything else yields ''
+	 * @param (callable(string): ?string)|null $mentionUrl maps a mention id to a profile URL
+	 */
+	public function toHtml(mixed $node, ?callable $mentionUrl = null): string {
+		if (!is_array($node)) {
+			return '';
+		}
+		$this->mentionUrl = $mentionUrl !== null ? \Closure::fromCallable($mentionUrl) : null;
+		return $this->walkHtml($node);
+	}
+
+	private function walkHtml(array $node): string {
+		$type = (string)($node['type'] ?? '');
+		$content = is_array($node['content'] ?? null) ? $node['content'] : [];
+
+		switch ($type) {
+			case 'doc':
+				return $this->childrenHtml($content);
+			case 'paragraph':
+				return '<p>' . $this->childrenHtml($content) . '</p>';
+			case 'heading':
+				$level = max(1, min((int)($node['attrs']['level'] ?? 1), 6));
+				return '<h' . $level . '>' . $this->childrenHtml($content) . '</h' . $level . '>';
+			case 'text':
+				return $this->renderTextHtml($node);
+			case 'hardBreak':
+				return '<br>';
+			case 'bulletList':
+				return '<ul>' . $this->childrenHtml($content) . '</ul>';
+			case 'orderedList':
+				return '<ol>' . $this->childrenHtml($content) . '</ol>';
+			case 'listItem':
+				return '<li>' . $this->childrenHtml($content) . '</li>';
+			case 'codeBlock':
+				$lang = (string)($node['attrs']['language'] ?? '');
+				$class = $lang !== '' ? ' class="language-' . $this->esc($lang) . '"' : '';
+				return '<pre><code' . $class . '>' . $this->esc($this->codeText($content)) . '</code></pre>';
+			case 'blockquote':
+				return '<blockquote>' . $this->childrenHtml($content) . '</blockquote>';
+			case 'mention':
+				// The pill supplies its own '@'/icon, so emit just the display name.
+				$label = (string)($node['attrs']['text'] ?? '');
+				if ($label === '') {
+					$label = (string)($node['attrs']['id'] ?? '');
+				}
+				$safe = $this->esc(ltrim($label, '@'));
+				$url = $this->mentionUrl !== null ? ($this->mentionUrl)((string)($node['attrs']['id'] ?? '')) : null;
+				if (is_string($url) && $url !== '') {
+					return '<a class="unity-mention" href="' . $this->esc($url) . '">' . $safe . '</a>';
+				}
+				return '<span class="unity-mention">' . $safe . '</span>';
+			case 'emoji':
+				// ADF emoji nodes carry the actual character in `text`.
+				return $this->esc((string)($node['attrs']['text'] ?? $node['attrs']['shortName'] ?? ''));
+			case 'inlineCard':
+				$url = (string)($node['attrs']['url'] ?? '');
+				return $url !== '' ? '<a href="' . $this->esc($url) . '">' . $this->esc($url) . '</a>' : '';
+			case 'rule':
+				return '<hr>';
+			default:
+				return $this->childrenHtml($content);
+		}
+	}
+
+	private function renderTextHtml(array $node): string {
+		$text = $this->esc((string)($node['text'] ?? ''));
+		$href = '';
+		$marks = [];
+		foreach (($node['marks'] ?? []) as $mark) {
+			if (!is_array($mark)) {
+				continue;
+			}
+			$t = (string)($mark['type'] ?? '');
+			$marks[$t] = true;
+			if ($t === 'link') {
+				$href = (string)($mark['attrs']['href'] ?? '');
+			}
+		}
+		if (isset($marks['code'])) {
+			$text = '<code>' . $text . '</code>';
+		}
+		if (isset($marks['strong'])) {
+			$text = '<strong>' . $text . '</strong>';
+		}
+		if (isset($marks['em'])) {
+			$text = '<em>' . $text . '</em>';
+		}
+		if (isset($marks['strike'])) {
+			$text = '<s>' . $text . '</s>';
+		}
+		if ($href !== '') {
+			$text = '<a href="' . $this->esc($href) . '">' . $text . '</a>';
+		}
+		return $text;
+	}
+
+	private function childrenHtml(array $content): string {
+		$parts = [];
+		foreach ($content as $child) {
+			if (is_array($child)) {
+				$parts[] = $this->walkHtml($child);
+			}
+		}
+		return implode('', $parts);
+	}
+
+	/** Concatenate the raw text of a code block's child text nodes. */
+	private function codeText(array $content): string {
+		$out = '';
+		foreach ($content as $child) {
+			if (is_array($child) && ($child['type'] ?? '') === 'text') {
+				$out .= (string)($child['text'] ?? '');
+			}
+		}
+		return $out;
+	}
+
+	private function esc(string $text): string {
+		return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 	}
 
 	// --- Markdown -> ADF -----------------------------------------------------
@@ -242,7 +429,7 @@ class AdfConverter {
 	 * @return list<array<string, mixed>>
 	 */
 	private function inlineSegment(string $text): array {
-		$pattern = '/(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*]+\*)|(_[^_]+_)/';
+		$pattern = '/(@"user\/[^"]+")|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*]+\*)|(_[^_]+_)/';
 		$nodes = [];
 		$offset = 0;
 		while (preg_match($pattern, $text, $m, PREG_OFFSET_CAPTURE, $offset) === 1) {
@@ -264,6 +451,11 @@ class AdfConverter {
 	 * @return array<string, mixed>
 	 */
 	private function inlineToken(string $tok): array {
+		if (preg_match('/^@"user\/([^"]+)"$/', $tok, $m) === 1) {
+			// Jira Cloud resolves the display name from the accountId on render;
+			// `text` is only the fallback label.
+			return ['type' => 'mention', 'attrs' => ['id' => $m[1], 'text' => '@' . $m[1]]];
+		}
 		if (preg_match('/^`(.+)`$/s', $tok, $m) === 1) {
 			return ['type' => 'text', 'text' => $m[1], 'marks' => [['type' => 'code']]];
 		}

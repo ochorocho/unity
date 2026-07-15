@@ -22,6 +22,7 @@ import { renderTextile, renderHtml } from '../render.js'
 import { toggleTaskAt } from '../tasklist.js'
 import { highlightCodeBlocks } from '../highlight.js'
 import { emojify } from '../emoji.js'
+import { stylizeMentions } from '../mentions.js'
 
 export default {
 	name: 'RenderedText',
@@ -61,20 +62,30 @@ export default {
 			this.$nextTick(() => {
 				this.enableRenderedTasks()
 				this.highlightRendered()
+				this.applyMentionPills()
 			})
 		},
 		textileHtml() {
-			this.$nextTick(() => this.highlightRendered())
+			this.$nextTick(() => {
+				this.highlightRendered()
+				this.applyMentionPills()
+			})
 		},
 		html() {
-			this.$nextTick(() => this.highlightRendered())
+			this.$nextTick(() => {
+				this.highlightRendered()
+				this.applyMentionPills()
+			})
 		},
 	},
 	mounted() {
 		if (this.format === 'markdown' && this.$refs.mdRoot) {
 			// NcRichText renders (and re-renders on text change) asynchronously, so
-			// reapply the dimensions whenever the rendered subtree changes.
-			this.imageObserver = new MutationObserver(() => this.applyImageDimensions())
+			// reapply the dimensions and mention pills whenever the subtree changes.
+			this.imageObserver = new MutationObserver(() => {
+				this.applyImageDimensions()
+				this.applyMentionPills()
+			})
 			this.imageObserver.observe(this.$refs.mdRoot, { childList: true, subtree: true })
 			this.$nextTick(() => this.applyImageDimensions())
 		}
@@ -84,6 +95,7 @@ export default {
 			}
 			// The NcRichText (markdown) branch highlights itself; the v-html branches don't.
 			this.highlightRendered()
+			this.applyMentionPills()
 		})
 	},
 	beforeUnmount() {
@@ -126,6 +138,16 @@ export default {
 					img.setAttribute('height', d.height)
 				}
 			})
+		},
+		// Normalize mentions into uniform pills in whichever branch is active. The
+		// provider-HTML branches (Jira Cloud span, GitLab/Asana anchors) are exact;
+		// the markdown (GitHub) and textile (Redmine) branches carry only plain
+		// `@handle` text, so those use the wrapping heuristic.
+		applyMentionPills() {
+			stylizeMentions(this.$refs.htmlRoot, { heuristic: false })
+			stylizeMentions(this.$refs.htmlFormatRoot, { heuristic: false })
+			stylizeMentions(this.$refs.textileRoot, { heuristic: true })
+			stylizeMentions(this.$refs.mdRoot, { heuristic: true })
 		},
 		// Syntax-highlight code blocks in whichever provider-HTML branch is rendered
 		// (the NcRichText/markdown branch highlights itself).
@@ -295,6 +317,37 @@ export default {
 	:is(.unity-html, .unity-textile) :deep(.hljs-meta) {
 		color: #8b949e;
 	}
+}
+/* Mention pill — matches the editor's mention chip so rendered @mentions read as
+   mentions across every provider: a bordered chip with a person icon and the
+   name (no leading '@'). Normalized by stylizeMentions() (src/mentions.js). */
+.unity-rendered :deep(.unity-mention) {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0 8px 0 6px;
+	border: 1px solid var(--color-border-dark);
+	border-radius: 1em;
+	background: var(--color-main-background);
+	color: var(--color-main-text);
+	font-weight: 500;
+	line-height: 1.4;
+	text-decoration: none;
+	white-space: nowrap;
+	vertical-align: baseline;
+}
+.unity-rendered :deep(.unity-mention)::before {
+	content: '';
+	flex: 0 0 auto;
+	width: 1em;
+	height: 1em;
+	background-color: currentColor;
+	opacity: 0.7;
+	-webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 4a4 4 0 0 1 4 4 4 4 0 0 1-4 4 4 4 0 0 1-4-4 4 4 0 0 1 4-4m0 10c4.42 0 8 1.79 8 4v2H4v-2c0-2.21 3.58-4 8-4Z'/%3E%3C/svg%3E") center / contain no-repeat;
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 4a4 4 0 0 1 4 4 4 4 0 0 1-4 4 4 4 0 0 1-4-4 4 4 0 0 1 4-4m0 10c4.42 0 8 1.79 8 4v2H4v-2c0-2.21 3.58-4 8-4Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.unity-rendered :deep(a.unity-mention:hover) {
+	background: var(--color-background-hover);
 }
 .unity-rendered :deep(blockquote) {
 	border-left: 4px solid var(--color-border-dark);

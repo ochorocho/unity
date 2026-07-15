@@ -143,8 +143,21 @@ class RedmineClient extends AbstractTrackerClient {
 		return $comments;
 	}
 
+	public function supportsMentions(): bool {
+		return true;
+	}
+
+	/**
+	 * Rewrite canonical @mention tokens to Redmine's native `@login` form.
+	 * Redmine renders/notifies these only on 5.1+; older versions show literal text.
+	 */
+	private function mentions(string $text): string {
+		return $this->replaceMentionTokens($text, static fn (string $h): string => '@' . $h);
+	}
+
 	public function addComment(Connection $connection, array $refParts, string $body): Comment {
 		$id = (string)($refParts['id'] ?? '');
+		$body = $this->mentions($body);
 		$this->json(
 			$this->request('PUT', $this->base($connection) . '/issues/' . rawurlencode($id) . '.json', [
 				'headers' => $this->defaultHeaders($connection),
@@ -180,6 +193,7 @@ class RedmineClient extends AbstractTrackerClient {
 	}
 
 	public function updateComment(Connection $connection, array $refParts, string $commentId, string $body): Comment {
+		$body = $this->mentions($body);
 		$this->json(
 			$this->request('PUT', $this->base($connection) . '/journals/' . rawurlencode($commentId) . '.json', [
 				'headers' => $this->defaultHeaders($connection),
@@ -187,7 +201,8 @@ class RedmineClient extends AbstractTrackerClient {
 			], $connection),
 			'Update comment',
 		);
-		return new Comment($commentId, '', null, $body, null);
+		// The current user just edited their own note; Redmine has no note-delete API.
+		return new Comment($commentId, '', null, $body, null, editable: true, deletable: false);
 	}
 
 	public function updateIssue(Connection $connection, array $refParts, array $changes): Issue {
@@ -197,7 +212,7 @@ class RedmineClient extends AbstractTrackerClient {
 			$issue['subject'] = (string)$changes['title'];
 		}
 		if (array_key_exists('description', $changes)) {
-			$issue['description'] = (string)$changes['description'];
+			$issue['description'] = $this->mentions((string)$changes['description']);
 		}
 		if (array_key_exists('status', $changes) && (string)$changes['status'] !== '') {
 			$issue['status_id'] = (int)$changes['status'];
@@ -284,7 +299,7 @@ class RedmineClient extends AbstractTrackerClient {
 		$issue = [
 			'project_id' => $projectId,
 			'subject' => (string)$target['title'],
-			'description' => (string)($target['description'] ?? ''),
+			'description' => $this->mentions((string)($target['description'] ?? '')),
 		];
 		$trackerId = (int)($target['type'] ?? 0);
 		if ($trackerId > 0) {
@@ -368,7 +383,53 @@ class RedmineClient extends AbstractTrackerClient {
 			return [];
 		}
 		// Redmine memberships have no server-side search, so filter by name here.
-		return $this->filterByName($this->membershipOptions($connection, $projectId), $query);
+		$users = $this->filterByName($this->membershipOptions($connection, $projectId), $query);
+		return $this->enrichLogins($connection, $users);
+	}
+
+	/**
+	 * Best-effort: attach each user's Redmine `login` as the `mention` handle so
+	 * @mentions resolve (Redmine mentions by login, not numeric id). `/users/{id}`
+	 * is admin-only on most instances, so this is bounded and fails fast — the
+	 * first denied lookup stops enrichment and the rest keep only {id, name}.
+	 *
+	 * @param list<array{id: string, name: string}> $users
+	 * @return list<array{id: string, name: string, mention?: string}>
+	 */
+	private function enrichLogins(Connection $connection, array $users): array {
+		$max = 20;
+		foreach ($users as $i => $user) {
+			if ($i >= $max) {
+				break;
+			}
+			$id = (string)$user['id'];
+			if ($id === '') {
+				continue;
+			}
+			$login = $this->userLogin($connection, $id);
+			if ($login === null) {
+				break; // access denied — later lookups would fail too
+			}
+			if ($login !== '') {
+				$users[$i]['mention'] = $login;
+			}
+		}
+		return $users;
+	}
+
+	/** A Redmine user's login, '' if absent, or null if the API denied access. */
+	private function userLogin(Connection $connection, string $userId): ?string {
+		try {
+			$data = $this->json(
+				$this->request('GET', $this->base($connection) . '/users/' . rawurlencode($userId) . '.json', [
+					'headers' => $this->defaultHeaders($connection),
+				], $connection),
+				'User',
+			);
+		} catch (TrackerException $e) {
+			return null;
+		}
+		return (string)($data['user']['login'] ?? '');
 	}
 
 	/** The project id of an issue, or '' if it can't be resolved. */

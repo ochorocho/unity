@@ -148,6 +148,19 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame('<p>Hi</p>', $comment->renderedBody);
 	}
 
+	public function testAddCommentConvertsMentionToken(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/markdown')) {
+				return $this->response(200, ['html' => '<p>x</p>']);
+			}
+			$captured = $o;
+			return $this->response(201, ['id' => 5, 'author' => ['name' => 'A'], 'body' => 'x', 'created_at' => '2026-03-01T00:00:00Z']);
+		});
+		$this->client->addComment($this->connection, ['project' => '42', 'iid' => '7', 'path' => 'group/app'], 'ping @"user/janedoe" now');
+		$this->assertSame('ping @janedoe now', json_decode($captured['body'], true)['body']);
+	}
+
 	public function testFetchFileResolvesRelativeUploadViaApi(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
@@ -378,7 +391,10 @@ class GitLabClientTest extends TestCase {
 		$out = $this->client->searchAssignees($this->connection, ['refParts' => ['project' => '12', 'iid' => '5']], 'al');
 		$this->assertStringContainsString('/projects/12/members/all', $captured['url']);
 		$this->assertSame('al', $captured['options']['query']['query']);
-		$this->assertSame([['id' => '7', 'name' => 'Alice'], ['id' => '8', 'name' => 'Bob']], $out);
+		$this->assertSame([
+			['id' => '7', 'name' => 'Alice', 'mention' => 'alice'],
+			['id' => '8', 'name' => 'Bob', 'mention' => 'bob'],
+		], $out);
 	}
 
 	public function testCreateIssueEncodesAssignee(): void {

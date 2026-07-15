@@ -17,6 +17,7 @@ SPDX-FileCopyrightText: Matt Zabriskie
 SPDX-FileCopyrightText: Nextcloud GmbH and Nextcloud contributors
 SPDX-FileCopyrightText: Varun A P
 SPDX-FileCopyrightText: atomiks
+SPDX-FileCopyrightText: debounce developers
 SPDX-FileCopyrightText: escape-html developers
 
 This file is generated from multiple sources. Included packages:
@@ -85,6 +86,9 @@ This file is generated from multiple sources. Included packages:
 	- license: MIT
 - axios
 	- version: 1.18.1
+	- license: MIT
+- debounce
+	- version: 3.0.0
 	- license: MIT
 - dompurify
 	- version: 3.4.11

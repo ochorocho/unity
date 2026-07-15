@@ -301,7 +301,7 @@ class IssueService {
 	/**
 	 * Search users assignable to an existing issue.
 	 *
-	 * @return list<array{id: string, name: string}>
+	 * @return list<array{id: string, name: string, mention?: string}>
 	 * @throws TrackerException
 	 */
 	public function searchAssignees(string $userId, string $ref, string $query): array {
@@ -312,7 +312,7 @@ class IssueService {
 	/**
 	 * Search users assignable to a new issue in a project on a connection.
 	 *
-	 * @return list<array{id: string, name: string}>
+	 * @return list<array{id: string, name: string, mention?: string}>
 	 * @throws TrackerException
 	 */
 	public function searchCreateAssignees(string $userId, string $connectionId, string $project, string $query): array {

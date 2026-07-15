@@ -9,31 +9,25 @@ SPDX-FileCopyrightText: Borgar Þorsteinsson <borgar@borgar.net>
 SPDX-FileCopyrightText: Borys Serebrov
 SPDX-FileCopyrightText: Christoph Wurst
 SPDX-FileCopyrightText: Eduardo San Martin Morote
+SPDX-FileCopyrightText: Eric Norris (https://github.com/ericnorris)
 SPDX-FileCopyrightText: Eugene Sharygin <eush77@gmail.com>
 SPDX-FileCopyrightText: Evan You
 SPDX-FileCopyrightText: Iskren Ivov Chernev <iskren.chernev@gmail.com> (https://github.com/ichernev)
 SPDX-FileCopyrightText: Jeff Sagal <sagalbot@gmail.com>
 SPDX-FileCopyrightText: Jochen Roth
+SPDX-FileCopyrightText: Jordan Humphreys <jordan@zurb.com>
 SPDX-FileCopyrightText: Mark <mark@remarkablemark.org>
 SPDX-FileCopyrightText: Max <max@nextcloud.com>
 SPDX-FileCopyrightText: Nextcloud GmbH and Nextcloud contributors
 SPDX-FileCopyrightText: Rob Cresswell <robcresswell@pm.me>
-SPDX-FileCopyrightText: Scott Cooper <scttcper@gmail.com>
 SPDX-FileCopyrightText: Sindre Sorhus
 SPDX-FileCopyrightText: Stefan Thomas <justmoon@members.fsf.org> (http://www.justmoon.net)
 SPDX-FileCopyrightText: Titus Wormer <tituswormer@gmail.com> (https://wooorm.com)
 SPDX-FileCopyrightText: atomiks
-SPDX-FileCopyrightText: chenkai
 SPDX-FileCopyrightText: inline-style-parser developers
 SPDX-FileCopyrightText: rhysd <lin90162@yahoo.co.jp>
 
 This file is generated from multiple sources. Included packages:
-- @ckpack/vue-color
-	- version: 1.6.0
-	- license: MIT
-- @ctrl/tinycolor
-	- version: 3.6.1
-	- license: MIT
 - @floating-ui/dom
 	- version: 1.7.6
 	- license: MIT
@@ -199,6 +193,9 @@ This file is generated from multiple sources. Included packages:
 - splitpanes
 	- version: 4.1.2
 	- license: MIT
+- striptags
+	- version: 3.2.0
+	- license: MIT
 - style-to-js
 	- version: 1.1.21
 	- license: MIT
@@ -207,6 +204,9 @@ This file is generated from multiple sources. Included packages:
 	- license: MIT
 - textile-js
 	- version: 2.1.1
+	- license: MIT
+- tributejs
+	- version: 5.1.3
 	- license: MIT
 - trim-lines
 	- version: 3.0.1

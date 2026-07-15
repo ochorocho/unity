@@ -3,7 +3,11 @@
  */
 import { translate as t } from '@nextcloud/l10n'
 
-/** Toolbar actions per markup syntax. */
+/**
+ * Formatting toolbar actions per markup syntax. Each action carries the syntax
+ * to apply to the current selection: `wrap` surrounds it, `linePrefix` prefixes
+ * each selected line, `block` fences it, and `insert` drops a snippet.
+ */
 export function toolbarFor(syntax) {
 	if (syntax === 'textile') {
 		return [
@@ -35,38 +39,26 @@ export function toolbarFor(syntax) {
 }
 
 /**
- * Apply a toolbar action to a textarea's current selection.
+ * Build the text a toolbar action inserts, given the currently selected text.
+ * `wrap`/`block` surround the selection; `linePrefix` prefixes each selected
+ * line; `insert` ignores the selection. Returns null for an unknown action.
  *
- * @return {{value: string, start: number, end: number}} the new value + selection to restore
+ * @param {object} action a toolbar action from toolbarFor()
+ * @param {string} selected the currently selected text ('' when none)
+ * @return {string|null} the text to insert in place of the selection
  */
-export function applyAction(textarea, action) {
-	const value = textarea.value
-	const start = textarea.selectionStart
-	const end = textarea.selectionEnd
-	const selected = value.slice(start, end)
-
+export function actionText(action, selected) {
 	if (action.wrap) {
-		const [before, after] = action.wrap
-		const newValue = value.slice(0, start) + before + selected + after + value.slice(end)
-		return { value: newValue, start: start + before.length, end: start + before.length + selected.length }
-	}
-	if (action.linePrefix) {
-		const lineStart = value.lastIndexOf('\n', start - 1) + 1
-		const region = value.slice(lineStart, end)
-		const lines = region.split('\n')
-		const prefixed = lines.map((l) => action.linePrefix + l).join('\n')
-		const newValue = value.slice(0, lineStart) + prefixed + value.slice(end)
-		return { value: newValue, start: start + action.linePrefix.length, end: end + action.linePrefix.length * lines.length }
+		return action.wrap[0] + selected + action.wrap[1]
 	}
 	if (action.block) {
-		const after = action.blockEnd || ''
-		const newValue = value.slice(0, start) + action.block + selected + after + value.slice(end)
-		return { value: newValue, start: start + action.block.length, end: start + action.block.length + selected.length }
+		return action.block + selected + (action.blockEnd || '')
+	}
+	if (action.linePrefix) {
+		return selected.split('\n').map((line) => action.linePrefix + line).join('\n')
 	}
 	if (action.insert) {
-		const newValue = value.slice(0, start) + action.insert + value.slice(end)
-		const pos = start + action.insert.length
-		return { value: newValue, start: pos, end: pos }
+		return action.insert
 	}
-	return { value, start, end }
+	return null
 }

@@ -38,6 +38,14 @@ class Comment implements JsonSerializable {
 		 * journal notes, so this stays false there). Set per-tracker in getComments().
 		 */
 		public bool $deletable = false,
+		/**
+		 * Mentions in `body`, as `{id, label}` where id is the canonical
+		 * `mention:<handle>` token id and label the display name. Lets the mention
+		 * editor render existing `@mention:<handle>` tokens as pills when editing.
+		 *
+		 * @var list<array{id: string, label: string}>
+		 */
+		public array $mentions = [],
 	) {
 	}
 

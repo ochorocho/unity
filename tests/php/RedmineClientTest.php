@@ -476,17 +476,32 @@ class RedmineClientTest extends TestCase {
 	}
 
 	public function testSearchAssigneesCreateContextFiltersMemberships(): void {
-		$captured = null;
-		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
-			$captured = $u;
-			return $this->response(200, ['memberships' => [
-				['user' => ['id' => 2, 'name' => 'Alice']],
-				['user' => ['id' => 3, 'name' => 'Bob']],
-			]]);
+		$membershipsUrl = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$membershipsUrl) {
+			if (str_contains($u, '/memberships.json')) {
+				$membershipsUrl = $u;
+				return $this->response(200, ['memberships' => [
+					['user' => ['id' => 2, 'name' => 'Alice']],
+					['user' => ['id' => 3, 'name' => 'Bob']],
+				]]);
+			}
+			// enrichLogins() resolves each user's login (the @mention handle).
+			return $this->response(200, ['user' => ['id' => 2, 'login' => 'alice']]);
 		});
 		$out = $this->client->searchAssignees($this->connection, ['project' => '27'], 'ali');
-		$this->assertStringContainsString('/projects/27/memberships.json', $captured);
-		$this->assertSame([['id' => '2', 'name' => 'Alice']], $out, 'filtered by name');
+		$this->assertStringContainsString('/projects/27/memberships.json', $membershipsUrl);
+		$this->assertSame([['id' => '2', 'name' => 'Alice', 'mention' => 'alice']], $out, 'filtered by name, login enriched');
+	}
+
+	public function testSearchAssigneesOmitsMentionWhenLoginDenied(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/memberships.json')) {
+				return $this->response(200, ['memberships' => [['user' => ['id' => 2, 'name' => 'Alice']]]]);
+			}
+			return $this->response(403, ['errors' => ['Forbidden']]); // non-admin cannot read /users
+		});
+		$out = $this->client->searchAssignees($this->connection, ['project' => '27'], 'ali');
+		$this->assertSame([['id' => '2', 'name' => 'Alice']], $out, 'no mention handle when login is denied');
 	}
 
 	public function testSearchAssigneesEditContextResolvesProject(): void {

@@ -110,4 +110,119 @@ class AdfConverterTest extends TestCase {
 		$this->assertSame('doc', $adf['type']);
 		$this->assertNotEmpty($adf['content']);
 	}
+
+	public function testFromMarkdownEmitsMentionNode(): void {
+		$adf = $this->adf->fromMarkdown('hi @"user/557058:abc-123" there');
+		$nodes = $adf['content'][0]['content'];
+		$mention = null;
+		foreach ($nodes as $node) {
+			if (($node['type'] ?? '') === 'mention') {
+				$mention = $node;
+			}
+		}
+		$this->assertNotNull($mention, 'a mention node should be emitted');
+		$this->assertSame('557058:abc-123', $mention['attrs']['id']);
+		// surrounding text is preserved
+		$this->assertSame('text', $nodes[0]['type']);
+		$this->assertSame('hi ', $nodes[0]['text']);
+	}
+
+	public function testFromMarkdownIgnoresPlainAtWord(): void {
+		$adf = $this->adf->fromMarkdown('email me @notauser please');
+		foreach ($adf['content'][0]['content'] as $node) {
+			$this->assertNotSame('mention', $node['type'] ?? '', 'a bare @word must not become a mention');
+		}
+	}
+
+	public function testToTextRendersMentionWithSingleAt(): void {
+		// Jira hydrates the mention text to include the '@'; we must not double it.
+		$withAt = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [
+				['type' => 'text', 'text' => 'hi '],
+				['type' => 'mention', 'attrs' => ['id' => '557058:abc', 'text' => '@Jochen Roth']],
+			]],
+		]];
+		$this->assertSame('hi @Jochen Roth', $this->adf->toText($withAt));
+
+		// Text without a leading '@' still gets exactly one.
+		$withoutAt = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [['type' => 'mention', 'attrs' => ['id' => 'x', 'text' => 'Jane']]]],
+		]];
+		$this->assertSame('@Jane', $this->adf->toText($withoutAt));
+
+		// Falls back to the id when no text is present.
+		$idOnly = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [['type' => 'mention', 'attrs' => ['id' => 'acc-1']]]],
+		]];
+		$this->assertSame('@acc-1', $this->adf->toText($idOnly));
+	}
+
+	public function testToTextMentionAsTokenEmitsEditorToken(): void {
+		$doc = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [
+				['type' => 'text', 'text' => 'hi '],
+				['type' => 'mention', 'attrs' => ['id' => '557058:abc', 'text' => '@Jochen Roth']],
+			]],
+		]];
+		// Default renders the display name; token mode emits the canonical editor token.
+		$this->assertSame('hi @Jochen Roth', $this->adf->toText($doc));
+		$this->assertSame('hi @"user/557058:abc"', $this->adf->toText($doc, true));
+	}
+
+	public function testExtractMentionsCollectsIdAndLabel(): void {
+		$doc = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [
+				['type' => 'mention', 'attrs' => ['id' => '557058:abc', 'text' => '@Jochen Roth']],
+				['type' => 'text', 'text' => ' and '],
+				['type' => 'mention', 'attrs' => ['id' => 'acc-2', 'text' => 'Jane']],
+			]],
+		]];
+		$this->assertSame([
+			['id' => 'user/557058:abc', 'label' => 'Jochen Roth'],
+			['id' => 'user/acc-2', 'label' => 'Jane'],
+		], $this->adf->extractMentions($doc));
+		$this->assertSame([], $this->adf->extractMentions('not an array'));
+	}
+
+	public function testToHtmlRendersMentionAsPill(): void {
+		$doc = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [
+				['type' => 'text', 'text' => 'hi '],
+				['type' => 'mention', 'attrs' => ['id' => '557058:abc', 'text' => '@Jochen Roth']],
+				['type' => 'text', 'text' => '!'],
+			]],
+		]];
+		// Without a URL builder the mention is a plain span (name only, no '@').
+		$html = $this->adf->toHtml($doc);
+		$this->assertStringContainsString('<span class="unity-mention">Jochen Roth</span>', $html);
+		$this->assertStringNotContainsString('@', $html);
+		$this->assertStringContainsString('<p>hi ', $html);
+
+		// With a builder the mention links to the user's profile (accountId → URL).
+		$linked = $this->adf->toHtml($doc, static fn (string $id): string => 'https://acme.atlassian.net/jira/people/' . $id);
+		$this->assertStringContainsString(
+			'<a class="unity-mention" href="https://acme.atlassian.net/jira/people/557058:abc">Jochen Roth</a>',
+			$linked,
+		);
+	}
+
+	public function testToHtmlRendersMarksListsAndCode(): void {
+		$doc = ['type' => 'doc', 'version' => 1, 'content' => [
+			['type' => 'paragraph', 'content' => [
+				['type' => 'text', 'text' => 'bold', 'marks' => [['type' => 'strong']]],
+				['type' => 'text', 'text' => ' & ', 'marks' => []],
+				['type' => 'text', 'text' => 'link', 'marks' => [['type' => 'link', 'attrs' => ['href' => 'https://x.test']]]],
+			]],
+			['type' => 'bulletList', 'content' => [
+				['type' => 'listItem', 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'one']]]]],
+			]],
+			['type' => 'codeBlock', 'attrs' => ['language' => 'php'], 'content' => [['type' => 'text', 'text' => '<x>&']]],
+		]];
+		$html = $this->adf->toHtml($doc);
+		$this->assertStringContainsString('<strong>bold</strong>', $html);
+		$this->assertStringContainsString(' &amp; ', $html, 'text is HTML-escaped');
+		$this->assertStringContainsString('<a href="https://x.test">link</a>', $html);
+		$this->assertStringContainsString('<ul><li><p>one</p></li></ul>', $html);
+		$this->assertStringContainsString('<pre><code class="language-php">&lt;x&gt;&amp;</code></pre>', $html);
+	}
 }

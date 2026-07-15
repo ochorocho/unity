@@ -33,6 +33,7 @@
 					:format="format"
 					:issue-ref="issueRef"
 					:tracker="tracker"
+					:mentions="comment.mentions || []"
 					:rows="4" />
 				<div class="unity-comment-edit-actions">
 					<NcButton :disabled="saving" @click="cancelEdit">{{ t('unity', 'Cancel') }}</NcButton>

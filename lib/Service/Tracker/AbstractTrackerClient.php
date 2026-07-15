@@ -51,6 +51,11 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		return false;
 	}
 
+	/** Default: no @mention support. Overridden by trackers that can encode mentions. */
+	public function supportsMentions(): bool {
+		return false;
+	}
+
 	/**
 	 * Default: no create metadata. Overridden by trackers that support creation.
 	 *
@@ -182,7 +187,7 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	 * assigning issues.
 	 *
 	 * @param array{refParts?: array, project?: string} $context
-	 * @return list<array{id: string, name: string}>
+	 * @return list<array{id: string, name: string, mention?: string}>
 	 */
 	public function searchAssignees(Connection $connection, array $context, string $query): array {
 		return [];
@@ -296,6 +301,31 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 			$options,
 			static fn (array $o): bool => stripos($o['name'], $query) !== false,
 		));
+	}
+
+	/**
+	 * Canonical mention-token grammar, shared with the frontend editor. A picked
+	 * user is stored in the body as `@"user/<handle>"`, where <handle> is the
+	 * provider-native mention id (login, username, accountId, gid, …). The
+	 * `user/`-prefixed quoted shape is the one NcRichContenteditable recognizes for
+	 * ids that contain a colon (e.g. Jira accountIds), so it round-trips as a pill.
+	 * Group 1 captures the handle.
+	 */
+	protected const MENTION_TOKEN_PATTERN = '/@"user\/([^"]+)"/';
+
+	/**
+	 * Rewrite every canonical mention token in $body to a provider-native form.
+	 * `$format` receives the raw handle and returns its native representation
+	 * (e.g. `@login`, `[~user]`); non-mention text is left untouched. Used by the
+	 * plain-string providers and Jira Server; Jira Cloud (ADF) and Asana (HTML)
+	 * encode mentions inside their own converters instead.
+	 */
+	protected function replaceMentionTokens(string $body, callable $format): string {
+		return preg_replace_callback(
+			self::MENTION_TOKEN_PATTERN,
+			static fn (array $m): string => (string)$format($m[1]),
+			$body,
+		) ?? $body;
 	}
 
 	/** @return array<string, string> */

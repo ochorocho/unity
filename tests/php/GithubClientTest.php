@@ -123,6 +123,26 @@ class GithubClientTest extends TestCase {
 		$this->assertFalse($comments[1]->deletable);
 	}
 
+	public function testGetCommentsRequestsRenderedHtmlAndKeepsRawBody(): void {
+		$accept = '';
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$accept) {
+			if (str_contains($u, '/user')) {
+				return $this->response(200, ['login' => 'Octo']);
+			}
+			$accept = $o['headers']['Accept'] ?? '';
+			return $this->response(200, [[
+				'id' => 1, 'user' => ['login' => 'octo'],
+				'body' => 'hi @mona',
+				'body_html' => '<p>hi <a class="user-mention" href="https://github.com/mona">@mona</a></p>',
+				'created_at' => 'x', 'html_url' => 'h1',
+			]]);
+		});
+		$comments = $this->client->getComments($this->connection, ['owner' => 'o', 'repo' => 'r', 'number' => '10']);
+		$this->assertSame('application/vnd.github.full+json', $accept, 'asks GitHub for the rendered body');
+		$this->assertSame('hi @mona', $comments[0]->body, 'raw markdown kept for editing');
+		$this->assertStringContainsString('class="user-mention"', (string)$comments[0]->renderedBody);
+	}
+
 	public function testDeleteCommentDeletes(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u) use (&$captured) {

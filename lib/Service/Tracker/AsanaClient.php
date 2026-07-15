@@ -255,6 +255,10 @@ class AsanaClient extends AbstractTrackerClient {
 		return true;
 	}
 
+	public function supportsMentions(): bool {
+		return true;
+	}
+
 	public function getAttachments(Connection $connection, array $refParts): array {
 		$gid = (string)($refParts['gid'] ?? '');
 		$rows = $this->data(

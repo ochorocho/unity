@@ -80,6 +80,13 @@ interface TrackerClientInterface {
 	public function supportsCreate(): bool;
 
 	/**
+	 * Whether this tracker can encode @mentions in comment/description bodies.
+	 * When true, the frontend editor enables the `@` autocomplete and the client
+	 * rewrites canonical `@mention:<handle>` tokens into the provider-native form.
+	 */
+	public function supportsMentions(): bool;
+
+	/**
 	 * Targets (projects/repos) the user can create an issue in, plus any required
 	 * type list per target (Jira issue types, Redmine trackers). `capabilities.type`
 	 * is true when a type must be chosen.
@@ -204,9 +211,11 @@ interface TrackerClientInterface {
 	 * Search users assignable to an existing issue (context has 'refParts') or to a
 	 * new issue in a project (context has 'project'). Each option's id is the same
 	 * identity that updateIssue()/createIssue() expect for the 'assignee' change.
+	 * The optional `mention` is the provider-native @mention handle when it differs
+	 * from `id` (e.g. GitLab username, Redmine login); absent when it equals `id`.
 	 *
 	 * @param array{refParts?: array, project?: string} $context
-	 * @return list<array{id: string, name: string}>
+	 * @return list<array{id: string, name: string, mention?: string}>
 	 */
 	public function searchAssignees(Connection $connection, array $context, string $query): array;
 

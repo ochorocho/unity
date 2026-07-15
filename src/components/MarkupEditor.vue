@@ -22,34 +22,19 @@
 					type="button"
 					class="unity-editor-btn"
 					:title="a.title"
-					@click="apply(a)">
+					@mousedown.prevent="apply(a)">
 					{{ a.label }}
 				</button>
-				<NcEmojiPicker :close-on-select="false" @select="insertEmoji">
-					<button type="button" class="unity-editor-btn" :title="t('unity', 'Insert emoji')">🙂</button>
-				</NcEmojiPicker>
 			</div>
-			<div class="unity-editor-input">
-				<textarea ref="ta"
-					class="unity-editor-textarea"
-					:value="modelValue"
+			<div class="unity-editor-input" :style="{ '--unity-editor-min-height': minHeight }">
+				<NcRichContenteditable ref="editor"
+					:model-value="modelValue"
+					:label="placeholder"
 					:placeholder="placeholder"
-					:rows="rows"
-					@input="onInput"
-					@keydown="onKeydown"
-					@click="detect"
-					@blur="closeMenu" />
-				<ul v-if="menu.open" class="unity-emoji-menu">
-					<li v-for="(e, i) in menu.items"
-						:key="e.id"
-						class="unity-emoji-item"
-						:class="{ active: i === menu.index }"
-						@mousedown.prevent="pick(i)"
-						@mousemove="menu.index = i">
-						<span class="unity-emoji-native">{{ e.native }}</span>
-						<span class="unity-emoji-name">:{{ e.id }}:</span>
-					</li>
-				</ul>
+					:multiline="true"
+					:auto-complete="mentionSearch"
+					:user-data="mentionUserData"
+					@update:model-value="$emit('update:modelValue', $event)" />
 			</div>
 		</div>
 
@@ -61,41 +46,52 @@
 </template>
 
 <script>
-import NcEmojiPicker from '@nextcloud/vue/components/NcEmojiPicker'
+import axios from '@nextcloud/axios'
+import { generateUrl } from '@nextcloud/router'
+import NcRichContenteditable from '@nextcloud/vue/components/NcRichContenteditable'
 import RenderedText from './RenderedText.vue'
-import { toolbarFor, applyAction } from '../editor.js'
-import { searchEmojis, emojiToShortcode } from '../emoji.js'
 import { trackerById } from '../trackers.js'
+import { toolbarFor, actionText } from '../editor.js'
 
 export default {
 	name: 'MarkupEditor',
-	components: { NcEmojiPicker, RenderedText },
+	components: { NcRichContenteditable, RenderedText },
 	props: {
 		modelValue: { type: String, default: '' },
 		// The tracker body format ('markdown' | 'textile' | 'html' | 'plaintext').
-		// Drives both the toolbar syntax and how the Preview tab renders.
+		// Drives how the Preview tab renders.
 		format: { type: String, default: 'markdown' },
 		issueRef: { type: String, default: '' },
 		tracker: { type: String, default: '' },
 		placeholder: { type: String, default: '' },
 		rows: { type: Number, default: 6 },
+		// Create context (no issueRef yet): connection id + project the @mention
+		// user search should scope to. Ignored when issueRef is set.
+		connection: { type: String, default: '' },
+		project: { type: String, default: '' },
+		// Existing mentions in the initial value, as {id, label}, so their
+		// @"user/<handle>" tokens render as pills when editing (not just newly
+		// picked ones). id is the canonical 'user/<handle>' token id.
+		mentions: { type: Array, default: () => [] },
 	},
 	emits: ['update:modelValue'],
 	data() {
+		// Seed userData with the initial mentions so pills render before
+		// NcRichContenteditable first paints; mentionSearch adds more as the user types.
+		const mentionUserData = {}
+		for (const m of this.mentions) {
+			if (m && m.id) {
+				mentionUserData[m.id] = { id: m.id, label: m.label || m.id, icon: 'icon-user', source: 'unity' }
+			}
+		}
 		return {
 			tab: 'write',
-			menu: { open: false, items: [], index: 0, start: 0 },
+			// id -> autocomplete item, so NcRichContenteditable can render a picked
+			// mention as a pill (it looks up the @token id in this map).
+			mentionUserData,
 		}
 	},
 	computed: {
-		// Toolbar snippets only come in markdown and textile flavours; anything
-		// that isn't textile (markdown, html, plaintext) uses the markdown toolbar.
-		syntax() {
-			return this.format === 'textile' ? 'textile' : 'markdown'
-		},
-		toolbar() {
-			return toolbarFor(this.syntax)
-		},
 		// Preview must match how the saved body is displayed, so an HTML body
 		// (e.g. Jira Server/DC) renders as HTML instead of showing raw tags.
 		previewFormat() {
@@ -104,87 +100,104 @@ export default {
 			}
 			return this.format === 'textile' ? 'textile' : 'markdown'
 		},
-		useShortcodes() {
-			return trackerById(this.tracker).emojiShortcodes
+		mentionsEnabled() {
+			return trackerById(this.tracker).mention
+		},
+		minHeight() {
+			return Math.max(3, this.rows) * 1.4 + 'em'
+		},
+		// Toolbar snippets come in markdown and textile flavours; anything that
+		// isn't textile (markdown, html, plaintext) uses the markdown toolbar.
+		syntax() {
+			return this.format === 'textile' ? 'textile' : 'markdown'
+		},
+		toolbar() {
+			return toolbarFor(this.syntax)
 		},
 	},
 	methods: {
+		/** The NcRichContenteditable's editable element, or null. */
+		editorEl() {
+			const root = this.$refs.editor && this.$refs.editor.$el
+			return root ? root.querySelector('[contenteditable]') : null
+		},
+		/**
+		 * Apply a formatting toolbar action to the current selection. Buttons use
+		 * @mousedown.prevent so focus/selection stay in the contenteditable, then
+		 * document.execCommand('insertText') replaces the selection — which fires the
+		 * input event NcRichContenteditable listens to, so modelValue updates.
+		 *
+		 * @param {object} action a toolbar action from editor.js
+		 */
 		apply(action) {
-			const ta = this.$refs.ta
-			const res = applyAction(ta, action)
-			this.$emit('update:modelValue', res.value)
-			this.$nextTick(() => {
-				ta.focus()
-				ta.setSelectionRange(res.start, res.end)
-			})
-		},
-		insertEmoji(emoji) {
-			const native = typeof emoji === 'string' ? emoji : (emoji && emoji.native) || ''
-			const out = this.useShortcodes ? (emojiToShortcode(native) || native) : native
-			this.apply({ insert: out })
-		},
-		onInput(e) {
-			this.$emit('update:modelValue', e.target.value)
-			this.$nextTick(this.detect)
-		},
-		detect() {
-			const ta = this.$refs.ta
-			if (!ta) {
+			const el = this.editorEl()
+			if (!el) {
 				return
 			}
-			const caret = ta.selectionStart
-			const before = ta.value.slice(0, caret)
-			const m = before.match(/:([a-z0-9_+-]+)$/i)
-			if (!m) {
-				this.closeMenu()
+			if (document.activeElement !== el) {
+				el.focus()
+			}
+			const selection = window.getSelection()
+			const selected = selection ? selection.toString() : ''
+			const text = actionText(action, selected)
+			if (text === null) {
 				return
 			}
-			const items = searchEmojis(m[1].toLowerCase(), 8)
-			if (items.length === 0) {
-				this.closeMenu()
-				return
-			}
-			this.menu = { open: true, items, index: 0, start: caret - m[0].length }
-		},
-		onKeydown(e) {
-			if (!this.menu.open) {
-				return
-			}
-			const len = this.menu.items.length
-			if (e.key === 'ArrowDown') {
-				this.menu.index = (this.menu.index + 1) % len
-				e.preventDefault()
-			} else if (e.key === 'ArrowUp') {
-				this.menu.index = (this.menu.index - 1 + len) % len
-				e.preventDefault()
-			} else if (e.key === 'Enter' || e.key === 'Tab') {
-				this.pick(this.menu.index)
-				e.preventDefault()
-			} else if (e.key === 'Escape') {
-				this.closeMenu()
-				e.preventDefault()
+			document.execCommand('insertText', false, text)
+			// For an empty-selection wrap (e.g. **|**), drop the caret between the
+			// markers so the user can type inside them.
+			if (action.wrap && selected === '' && action.wrap[1]) {
+				try {
+					const sel = window.getSelection()
+					for (let i = 0; i < action.wrap[1].length; i++) {
+						sel.modify('move', 'backward', 'character')
+					}
+				} catch (e) {
+					// Selection.modify is non-standard; caret just stays after the markers.
+				}
 			}
 		},
-		pick(i) {
-			const ta = this.$refs.ta
-			const emoji = this.menu.items[i]
-			if (!ta || !emoji) {
+		/**
+		 * NcRichContenteditable's `@` autocomplete source. Reuses the assignee/user
+		 * search and maps each user to a mention option whose id is the canonical
+		 * `user/<handle>` token — NcRichContenteditable then stores it in the body
+		 * as `@"user/<handle>"`, which the backend rewrites to the provider-native
+		 * mention. The option's id is also recorded in userData so the picked mention
+		 * renders as a pill.
+		 *
+		 * @param {string} search the text typed after `@`
+		 * @param {Function} callback receives the list of mention options
+		 */
+		mentionSearch(search, callback) {
+			if (!this.mentionsEnabled) {
+				callback([])
 				return
 			}
-			const insert = this.useShortcodes ? ':' + emoji.id + ':' : emoji.native
-			const caret = ta.selectionStart
-			const value = ta.value
-			const newValue = value.slice(0, this.menu.start) + insert + value.slice(caret)
-			const pos = this.menu.start + insert.length
-			this.closeMenu()
-			this.$emit('update:modelValue', newValue)
-			this.$nextTick(() => {
-				ta.focus()
-				ta.setSelectionRange(pos, pos)
-			})
-		},
-		closeMenu() {
-			this.menu.open = false
+			const params = { query: (search || '').trim() }
+			let url
+			if (this.issueRef) {
+				url = generateUrl('/apps/unity/issues/{ref}/assignees', { ref: this.issueRef })
+			} else if (this.connection) {
+				url = generateUrl('/apps/unity/create-assignees')
+				params.connection = this.connection
+				params.project = this.project
+			} else {
+				callback([])
+				return
+			}
+			axios.get(url, { params }).then(({ data }) => {
+				const users = Array.isArray(data) ? data : []
+				callback(users.map((u) => {
+					const handle = u.mention || u.id
+					// `user/<handle>` is the token id NcRichContenteditable recognizes
+					// for handles containing a colon (e.g. Jira accountIds); the backend
+					// rewrites @"user/<handle>" to the provider-native mention.
+					const id = 'user/' + handle
+					const item = { id, label: u.name || handle, icon: 'icon-user', source: 'unity' }
+					this.mentionUserData[id] = item
+					return item
+				}))
+			}).catch(() => callback([]))
 		},
 	},
 }
@@ -237,48 +250,11 @@ export default {
 	background: var(--color-background-hover);
 }
 .unity-editor-input {
-	position: relative;
-}
-.unity-editor-textarea {
-	width: 100%;
-	border: none;
-	padding: 8px;
-	resize: vertical;
-	background: var(--color-main-background);
-	color: var(--color-main-text);
-	font-family: inherit;
-}
-.unity-emoji-menu {
-	position: absolute;
-	left: 8px;
-	bottom: 8px;
-	z-index: 20;
-	min-width: 180px;
-	max-height: 200px;
-	overflow-y: auto;
-	background: var(--color-main-background);
-	border: 1px solid var(--color-border);
-	border-radius: var(--border-radius-large, 12px);
-	box-shadow: 0 2px 8px var(--color-box-shadow, rgba(0, 0, 0, 0.2));
-	padding: 4px;
-}
-.unity-emoji-item {
-	display: flex;
-	align-items: center;
-	gap: 8px;
 	padding: 4px 8px;
-	border-radius: var(--border-radius, 6px);
-	cursor: pointer;
 }
-.unity-emoji-item.active {
-	background: var(--color-primary-element-light);
-}
-.unity-emoji-native {
-	font-size: 1.1em;
-}
-.unity-emoji-name {
-	color: var(--color-text-maxcontrast);
-	font-size: 0.85em;
+.unity-editor-input :deep(.rich-contenteditable__input) {
+	min-height: var(--unity-editor-min-height, 6em);
+	max-height: 40vh;
 }
 .unity-editor-preview {
 	padding: 8px;

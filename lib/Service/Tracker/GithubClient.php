@@ -97,10 +97,26 @@ class GithubClient extends AbstractTrackerClient {
 		return new TrackerSearchResult($issues, $next);
 	}
 
+	/**
+	 * Headers that ask GitHub to also return the rendered HTML body (`body_html`,
+	 * with native @user / #issue links) next to the raw Markdown `body`.
+	 *
+	 * @return array<string, string>
+	 */
+	private function fullHeaders(Connection $connection): array {
+		return array_merge($this->defaultHeaders($connection), ['Accept' => 'application/vnd.github.full+json']);
+	}
+
+	/** GitHub's rendered HTML body (`body_html`) from a raw issue/comment, or null. */
+	private function renderedFromRaw(mixed $raw): ?string {
+		$html = is_array($raw) ? ($raw['body_html'] ?? null) : null;
+		return is_string($html) && $html !== '' ? $html : null;
+	}
+
 	public function getIssue(Connection $connection, array $refParts): Issue {
 		$data = $this->json(
 			$this->request('GET', $this->issueUrl($connection, $refParts), [
-				'headers' => $this->defaultHeaders($connection),
+				'headers' => $this->fullHeaders($connection),
 			], $connection),
 			'Get issue',
 		);
@@ -110,7 +126,7 @@ class GithubClient extends AbstractTrackerClient {
 	public function getComments(Connection $connection, array $refParts): array {
 		$data = $this->json(
 			$this->request('GET', $this->issueUrl($connection, $refParts) . '/comments', [
-				'headers' => $this->defaultHeaders($connection),
+				'headers' => $this->fullHeaders($connection),
 			], $connection),
 			'Get comments',
 		);
@@ -123,7 +139,7 @@ class GithubClient extends AbstractTrackerClient {
 			$login = (string)($raw['user']['login'] ?? '');
 			// Only the comment author may edit/delete it (GitHub logins are case-insensitive).
 			$own = $currentLogin !== '' && strcasecmp($login, $currentLogin) === 0;
-			$comments[] = new Comment(
+			$comment = new Comment(
 				(string)($raw['id'] ?? ''),
 				$login,
 				$raw['user']['avatar_url'] ?? null,
@@ -133,6 +149,8 @@ class GithubClient extends AbstractTrackerClient {
 				editable: $own,
 				deletable: $own,
 			);
+			$comment->renderedBody = $this->renderedFromRaw($raw);
+			$comments[] = $comment;
 		}
 		return $comments;
 	}
@@ -152,22 +170,37 @@ class GithubClient extends AbstractTrackerClient {
 		}
 	}
 
+	public function supportsMentions(): bool {
+		return true;
+	}
+
+	/** Rewrite canonical @mention tokens to GitHub's native `@login` form. */
+	private function mentions(string $text): string {
+		return $this->replaceMentionTokens($text, static fn (string $h): string => '@' . $h);
+	}
+
 	public function addComment(Connection $connection, array $refParts, string $body): Comment {
+		$body = $this->mentions($body);
 		$raw = $this->json(
 			$this->request('POST', $this->issueUrl($connection, $refParts) . '/comments', [
-				'headers' => $this->defaultHeaders($connection),
+				'headers' => $this->fullHeaders($connection),
 				'body' => json_encode(['body' => $body]),
 			], $connection),
 			'Add comment',
 		);
-		return new Comment(
+		$comment = new Comment(
 			(string)($raw['id'] ?? ''),
 			(string)($raw['user']['login'] ?? ''),
 			$raw['user']['avatar_url'] ?? null,
 			(string)($raw['body'] ?? $body),
 			$raw['created_at'] ?? null,
 			$raw['html_url'] ?? null,
+			// The current user just authored it, so it is theirs to edit/delete.
+			editable: true,
+			deletable: true,
 		);
+		$comment->renderedBody = $this->renderedFromRaw($raw);
+		return $comment;
 	}
 
 	public function logTime(Connection $connection, array $refParts, int $seconds, string $comment, ?string $startedAt): void {
@@ -177,21 +210,26 @@ class GithubClient extends AbstractTrackerClient {
 	public function updateComment(Connection $connection, array $refParts, string $commentId, string $body): Comment {
 		$owner = rawurlencode((string)($refParts['owner'] ?? ''));
 		$repo = rawurlencode((string)($refParts['repo'] ?? ''));
+		$body = $this->mentions($body);
 		$raw = $this->json(
 			$this->request('PATCH', $this->apiRoot($connection) . '/repos/' . $owner . '/' . $repo . '/issues/comments/' . rawurlencode($commentId), [
-				'headers' => $this->defaultHeaders($connection),
+				'headers' => $this->fullHeaders($connection),
 				'body' => json_encode(['body' => $body]),
 			], $connection),
 			'Update comment',
 		);
-		return new Comment(
+		$comment = new Comment(
 			(string)($raw['id'] ?? $commentId),
 			(string)($raw['user']['login'] ?? ''),
 			$raw['user']['avatar_url'] ?? null,
 			(string)($raw['body'] ?? $body),
 			$raw['created_at'] ?? null,
 			$raw['html_url'] ?? null,
+			editable: true,
+			deletable: true,
 		);
+		$comment->renderedBody = $this->renderedFromRaw($raw);
+		return $comment;
 	}
 
 	public function deleteComment(Connection $connection, array $refParts, string $commentId): void {
@@ -211,7 +249,7 @@ class GithubClient extends AbstractTrackerClient {
 			$body['title'] = (string)$changes['title'];
 		}
 		if (array_key_exists('description', $changes)) {
-			$body['body'] = (string)$changes['description'];
+			$body['body'] = $this->mentions((string)$changes['description']);
 		}
 		if (array_key_exists('status', $changes)) {
 			$status = (string)$changes['status'];
@@ -303,7 +341,7 @@ class GithubClient extends AbstractTrackerClient {
 		[$owner, $repo] = explode('/', $full, 2);
 		$body = [
 			'title' => (string)$target['title'],
-			'body' => (string)($target['description'] ?? ''),
+			'body' => $this->mentions((string)($target['description'] ?? '')),
 		];
 		$assignee = (string)($target['assignee'] ?? '');
 		if ($assignee !== '') {
@@ -686,6 +724,9 @@ class GithubClient extends AbstractTrackerClient {
 			(string)($raw['html_url'] ?? ''),
 			null,
 			'markdown',
+			// body_html (from the full media type on getIssue) renders @user / #issue
+			// as native links; the search-list fetch omits it, leaving this null.
+			renderedDescription: $this->renderedFromRaw($raw),
 		);
 	}
 
