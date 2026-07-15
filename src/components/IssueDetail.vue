@@ -20,12 +20,19 @@
 				</div>
 			</div>
 			<div class="unity-detail-actions">
-				<NcButton v-if="!editing" type="secondary" @click="editing = true">{{ t('unity', 'Edit') }}</NcButton>
+				<template v-if="editing">
+					<NcButton type="tertiary" @click="editing = false">{{ t('unity', 'Cancel') }}</NcButton>
+					<NcButton type="primary" :disabled="editSaving" @click="$refs.edit.save()">
+						<template v-if="editSaving" #icon><NcLoadingIcon :size="20" /></template>
+						{{ t('unity', 'Save') }}
+					</NcButton>
+				</template>
+				<NcButton v-else type="secondary" @click="editing = true">{{ t('unity', 'Edit') }}</NcButton>
 				<NcButton type="tertiary" :aria-label="t('unity', 'Close')" @click="$emit('close')">✕</NcButton>
 			</div>
 		</div>
 
-		<IssueEdit v-if="editing" :issue="issue" @saved="onSaved" @cancel="editing = false" />
+		<IssueEdit v-if="editing" ref="edit" :issue="issue" @saved="onSaved" @saving="editSaving = $event" />
 
 		<template v-else>
 		<div class="unity-meta">
@@ -133,6 +140,7 @@ export default {
 			attachmentsReloadKey: 0,
 			relationsReloadKey: 0,
 			editing: false,
+			editSaving: false,
 			editRecord: null,
 			dragOver: false,
 		}
@@ -142,6 +150,7 @@ export default {
 		// transient UI state so it doesn't leak from the previous issue.
 		'issue.ref'() {
 			this.editing = false
+			this.editSaving = false
 			this.showLogModal = false
 			this.editRecord = null
 			this.dragOver = false

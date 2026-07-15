@@ -3242,12 +3242,6 @@ body {
 	min-height: 90px;
 	border-radius: var(--border-radius-element, 8px);
 }
-.unity-edit-actions[data-v-2c131c69] {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	margin-top: 8px;
-}
 
 .unity-detail[data-v-3020205c] {
 	position: relative;
@@ -48583,7 +48577,7 @@ const _hoisted_14$5 = {
   key: 2,
   class: "unity-attachments-empty"
 };
-const _hoisted_15$3 = ["src", "alt"];
+const _hoisted_15$2 = ["src", "alt"];
 const _hoisted_16$2 = ["src"];
 const _hoisted_17$1 = ["src"];
 const _hoisted_18$1 = ["src", "title"];
@@ -48761,7 +48755,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
               key: 0,
               src: $options.proxy($data.preview.src),
               alt: $data.preview.filename
-            }, null, 8, _hoisted_15$3)) : $options.isVideo($data.preview) ? (openBlock(), createElementBlock(
+            }, null, 8, _hoisted_15$2)) : $options.isVideo($data.preview) ? (openBlock(), createElementBlock(
               Fragment,
               { key: 1 },
               [
@@ -49527,11 +49521,11 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 const AssigneePicker = /* @__PURE__ */ _export_sfc$2(_sfc_main$4, [["render", _sfc_render$4], ["__file", "/Users/jochen/Development/nextcloud-app-dev/app/unity/src/components/AssigneePicker.vue"]]);
 const _sfc_main$3 = {
   name: "IssueEdit",
-  components: { NcTextField: _sfc_main$N, NcButton, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField, AssigneePicker },
+  components: { NcTextField: _sfc_main$N, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField, AssigneePicker },
   props: {
     issue: { type: Object, required: true }
   },
-  emits: ["saved", "cancel"],
+  emits: ["saved", "saving"],
   data() {
     return {
       form: {
@@ -49546,7 +49540,6 @@ const _sfc_main$3 = {
       assigneeOriginalId: "",
       meta: null,
       loadingMeta: false,
-      saving: false,
       // Provider-native dynamic fields, their live values, and the originals for diffing.
       fields: [],
       fieldValues: {},
@@ -49624,7 +49617,7 @@ const _sfc_main$3 = {
       }
     },
     async save() {
-      this.saving = true;
+      this.$emit("saving", true);
       try {
         const payload = {
           title: this.form.title,
@@ -49662,7 +49655,7 @@ const _sfc_main$3 = {
       } catch (e) {
         showError(e?.response?.data?.error || this.t("unity", "Could not save issue"));
       } finally {
-        this.saving = false;
+        this.$emit("saving", false);
       }
     },
     setFieldValue(id, value) {
@@ -49712,7 +49705,6 @@ const _hoisted_14$3 = {
   key: 3,
   class: "unity-edit-field"
 };
-const _hoisted_15$2 = { class: "unity-edit-actions" };
 function _sfc_render$3(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_NcTextField = resolveComponent("NcTextField");
   const _component_MarkupEditor = resolveComponent("MarkupEditor");
@@ -49720,7 +49712,6 @@ function _sfc_render$3(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_NcSelect = resolveComponent("NcSelect");
   const _component_NcLoadingIcon = resolveComponent("NcLoadingIcon");
   const _component_DynamicField = resolveComponent("DynamicField");
-  const _component_NcButton = resolveComponent("NcButton");
   return openBlock(), createElementBlock("div", _hoisted_1$3, [
     createBaseVNode(
       "label",
@@ -49875,46 +49866,7 @@ function _sfc_render$3(_ctx, _cache, $props, $setup, $data, $options) {
     )) : $data.loadingMeta ? (openBlock(), createBlock(_component_NcLoadingIcon, {
       key: 1,
       size: 20
-    })) : createCommentVNode("v-if", true),
-    createBaseVNode("div", _hoisted_15$2, [
-      createVNode(_component_NcButton, {
-        type: "tertiary",
-        onClick: _cache[6] || (_cache[6] = ($event) => _ctx.$emit("cancel"))
-      }, {
-        default: withCtx(() => [
-          createTextVNode(
-            toDisplayString(_ctx.t("unity", "Cancel")),
-            1
-            /* TEXT */
-          )
-        ]),
-        _: 1
-        /* STABLE */
-      }),
-      createVNode(_component_NcButton, {
-        type: "primary",
-        disabled: $data.saving,
-        onClick: $options.save
-      }, createSlots({
-        default: withCtx(() => [
-          createTextVNode(
-            " " + toDisplayString(_ctx.t("unity", "Save")),
-            1
-            /* TEXT */
-          )
-        ]),
-        _: 2
-        /* DYNAMIC */
-      }, [
-        $data.saving ? {
-          name: "icon",
-          fn: withCtx(() => [
-            createVNode(_component_NcLoadingIcon, { size: 20 })
-          ]),
-          key: "0"
-        } : void 0
-      ]), 1032, ["disabled", "onClick"])
-    ])
+    })) : createCommentVNode("v-if", true)
   ]);
 }
 const IssueEdit = /* @__PURE__ */ _export_sfc$2(_sfc_main$3, [["render", _sfc_render$3], ["__scopeId", "data-v-2c131c69"], ["__file", "/Users/jochen/Development/nextcloud-app-dev/app/unity/src/components/IssueEdit.vue"]]);
@@ -49934,6 +49886,7 @@ const _sfc_main$2 = {
       attachmentsReloadKey: 0,
       relationsReloadKey: 0,
       editing: false,
+      editSaving: false,
       editRecord: null,
       dragOver: false
     };
@@ -49943,6 +49896,7 @@ const _sfc_main$2 = {
     // transient UI state so it doesn't leak from the previous issue.
     "issue.ref"() {
       this.editing = false;
+      this.editSaving = false;
       this.showLogModal = false;
       this.editRecord = null;
       this.dragOver = false;
@@ -50087,12 +50041,12 @@ const _hoisted_16$1 = { class: "unity-log-modal" };
 function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_Paperclip = resolveComponent("Paperclip");
   const _component_NcButton = resolveComponent("NcButton");
+  const _component_NcLoadingIcon = resolveComponent("NcLoadingIcon");
   const _component_IssueEdit = resolveComponent("IssueEdit");
   const _component_RenderedText = resolveComponent("RenderedText");
   const _component_IssueAttachments = resolveComponent("IssueAttachments");
   const _component_IssueRelations = resolveComponent("IssueRelations");
   const _component_TimeRecords = resolveComponent("TimeRecords");
-  const _component_NcLoadingIcon = resolveComponent("NcLoadingIcon");
   const _component_CommentList = resolveComponent("CommentList");
   const _component_AddComment = resolveComponent("AddComment");
   const _component_LogTime = resolveComponent("LogTime");
@@ -50101,9 +50055,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
     "div",
     {
       class: "unity-detail",
-      onDragover: _cache[9] || (_cache[9] = (...args) => $options.onDragOver && $options.onDragOver(...args)),
-      onDragleave: _cache[10] || (_cache[10] = (...args) => $options.onDragLeave && $options.onDragLeave(...args)),
-      onDrop: _cache[11] || (_cache[11] = (...args) => $options.onDrop && $options.onDrop(...args))
+      onDragover: _cache[11] || (_cache[11] = (...args) => $options.onDragOver && $options.onDragOver(...args)),
+      onDragleave: _cache[12] || (_cache[12] = (...args) => $options.onDragLeave && $options.onDragLeave(...args)),
+      onDrop: _cache[13] || (_cache[13] = (...args) => $options.onDrop && $options.onDrop(...args))
     },
     [
       $data.dragOver ? (openBlock(), createElementBlock("div", _hoisted_1$2, [
@@ -50147,10 +50101,54 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
           ])
         ]),
         createBaseVNode("div", _hoisted_6$2, [
-          !$data.editing ? (openBlock(), createBlock(_component_NcButton, {
-            key: 0,
+          $data.editing ? (openBlock(), createElementBlock(
+            Fragment,
+            { key: 0 },
+            [
+              createVNode(_component_NcButton, {
+                type: "tertiary",
+                onClick: _cache[0] || (_cache[0] = ($event) => $data.editing = false)
+              }, {
+                default: withCtx(() => [
+                  createTextVNode(
+                    toDisplayString(_ctx.t("unity", "Cancel")),
+                    1
+                    /* TEXT */
+                  )
+                ]),
+                _: 1
+                /* STABLE */
+              }),
+              createVNode(_component_NcButton, {
+                type: "primary",
+                disabled: $data.editSaving,
+                onClick: _cache[1] || (_cache[1] = ($event) => _ctx.$refs.edit.save())
+              }, createSlots({
+                default: withCtx(() => [
+                  createTextVNode(
+                    " " + toDisplayString(_ctx.t("unity", "Save")),
+                    1
+                    /* TEXT */
+                  )
+                ]),
+                _: 2
+                /* DYNAMIC */
+              }, [
+                $data.editSaving ? {
+                  name: "icon",
+                  fn: withCtx(() => [
+                    createVNode(_component_NcLoadingIcon, { size: 20 })
+                  ]),
+                  key: "0"
+                } : void 0
+              ]), 1032, ["disabled"])
+            ],
+            64
+            /* STABLE_FRAGMENT */
+          )) : (openBlock(), createBlock(_component_NcButton, {
+            key: 1,
             type: "secondary",
-            onClick: _cache[0] || (_cache[0] = ($event) => $data.editing = true)
+            onClick: _cache[2] || (_cache[2] = ($event) => $data.editing = true)
           }, {
             default: withCtx(() => [
               createTextVNode(
@@ -50161,13 +50159,13 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
             ]),
             _: 1
             /* STABLE */
-          })) : createCommentVNode("v-if", true),
+          })),
           createVNode(_component_NcButton, {
             type: "tertiary",
             "aria-label": _ctx.t("unity", "Close"),
-            onClick: _cache[1] || (_cache[1] = ($event) => _ctx.$emit("close"))
+            onClick: _cache[3] || (_cache[3] = ($event) => _ctx.$emit("close"))
           }, {
-            default: withCtx(() => [..._cache[12] || (_cache[12] = [
+            default: withCtx(() => [..._cache[14] || (_cache[14] = [
               createTextVNode(
                 "✕",
                 -1
@@ -50181,9 +50179,10 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
       ]),
       $data.editing ? (openBlock(), createBlock(_component_IssueEdit, {
         key: 1,
+        ref: "edit",
         issue: $props.issue,
         onSaved: $options.onSaved,
-        onCancel: _cache[2] || (_cache[2] = ($event) => $data.editing = false)
+        onSaving: _cache[4] || (_cache[4] = ($event) => $data.editSaving = $event)
       }, null, 8, ["issue", "onSaved"])) : (openBlock(), createElementBlock(
         Fragment,
         { key: 2 },
@@ -50244,15 +50243,15 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
             ref: "attachments",
             "issue-ref": $props.issue.ref,
             "reload-key": $data.attachmentsReloadKey,
-            onChanged: _cache[3] || (_cache[3] = ($event) => $data.attachmentsReloadKey++)
+            onChanged: _cache[5] || (_cache[5] = ($event) => $data.attachmentsReloadKey++)
           }, null, 8, ["issue-ref", "reload-key"])) : createCommentVNode("v-if", true),
           $options.supportsRelations ? (openBlock(), createBlock(_component_IssueRelations, {
             key: 2,
             "issue-ref": $props.issue.ref,
             "connection-id": $props.issue.connectionId,
             "reload-key": $data.relationsReloadKey,
-            onChanged: _cache[4] || (_cache[4] = ($event) => $data.relationsReloadKey++),
-            onOpen: _cache[5] || (_cache[5] = (ref2) => _ctx.$emit("open", ref2))
+            onChanged: _cache[6] || (_cache[6] = ($event) => $data.relationsReloadKey++),
+            onOpen: _cache[7] || (_cache[7] = (ref2) => _ctx.$emit("open", ref2))
           }, null, 8, ["issue-ref", "connection-id", "reload-key"])) : createCommentVNode("v-if", true),
           $options.supportsTime ? (openBlock(), createElementBlock("div", _hoisted_12$2, [
             createBaseVNode("div", _hoisted_13$2, [
@@ -50271,7 +50270,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                 )
               ]),
               createVNode(_component_NcButton, {
-                onClick: _cache[6] || (_cache[6] = ($event) => $options.openLog())
+                onClick: _cache[8] || (_cache[8] = ($event) => $options.openLog())
               }, {
                 default: withCtx(() => [
                   createTextVNode(
@@ -50308,13 +50307,13 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
             "issue-ref": $props.issue.ref,
             tracker: $props.issue.tracker,
             editable: true,
-            onUpdated: _cache[7] || (_cache[7] = ($event) => _ctx.$emit("updated"))
+            onUpdated: _cache[9] || (_cache[9] = ($event) => _ctx.$emit("updated"))
           }, null, 8, ["comments", "format", "issue-ref", "tracker"])),
           createVNode(_component_AddComment, {
             "issue-ref": $props.issue.ref,
             format: $props.issue.bodyFormat,
             tracker: $props.issue.tracker,
-            onAdded: _cache[8] || (_cache[8] = (c) => _ctx.$emit("comment-added", c))
+            onAdded: _cache[10] || (_cache[10] = (c) => _ctx.$emit("comment-added", c))
           }, null, 8, ["issue-ref", "format", "tracker"]),
           $data.showLogModal ? (openBlock(), createBlock(_component_NcDialog, {
             key: 6,

@@ -44,14 +44,6 @@
 				@update:model-value="setFieldValue(f.id, $event)" />
 		</template>
 		<NcLoadingIcon v-else-if="loadingMeta" :size="20" />
-
-		<div class="unity-edit-actions">
-			<NcButton type="tertiary" @click="$emit('cancel')">{{ t('unity', 'Cancel') }}</NcButton>
-			<NcButton type="primary" :disabled="saving" @click="save">
-				<template v-if="saving" #icon><NcLoadingIcon :size="20" /></template>
-				{{ t('unity', 'Save') }}
-			</NcButton>
-		</div>
 	</div>
 </template>
 
@@ -60,7 +52,6 @@ import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
 import { showError } from '@nextcloud/dialogs'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
-import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import MarkupEditor from './MarkupEditor.vue'
@@ -69,11 +60,11 @@ import AssigneePicker from './AssigneePicker.vue'
 
 export default {
 	name: 'IssueEdit',
-	components: { NcTextField, NcButton, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField, AssigneePicker },
+	components: { NcTextField, NcLoadingIcon, NcSelect, MarkupEditor, DynamicField, AssigneePicker },
 	props: {
 		issue: { type: Object, required: true },
 	},
-	emits: ['saved', 'cancel'],
+	emits: ['saved', 'saving'],
 	data() {
 		return {
 			form: {
@@ -88,7 +79,6 @@ export default {
 			assigneeOriginalId: '',
 			meta: null,
 			loadingMeta: false,
-			saving: false,
 			// Provider-native dynamic fields, their live values, and the originals for diffing.
 			fields: [],
 			fieldValues: {},
@@ -170,7 +160,9 @@ export default {
 			}
 		},
 		async save() {
-			this.saving = true
+			// The trigger button lives in the parent header; report saving state up so it
+			// can show the spinner and stay disabled during submit.
+			this.$emit('saving', true)
 			try {
 				const payload = {
 					title: this.form.title,
@@ -214,7 +206,7 @@ export default {
 			} catch (e) {
 				showError(e?.response?.data?.error || this.t('unity', 'Could not save issue'))
 			} finally {
-				this.saving = false
+				this.$emit('saving', false)
 			}
 		},
 		setFieldValue(id, value) {
@@ -263,11 +255,5 @@ export default {
 .unity-edit-multiselect {
 	min-height: 90px;
 	border-radius: var(--border-radius-element, 8px);
-}
-.unity-edit-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	margin-top: 8px;
 }
 </style>
