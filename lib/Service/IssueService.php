@@ -219,6 +219,22 @@ class IssueService {
 	}
 
 	/**
+	 * Upload a file for inline embedding (e.g. GitLab /uploads) and return the
+	 * markdown/url the editor inserts. Unlike uploadAttachment this doesn't change
+	 * the issue itself (the body must still be saved), so it doesn't mark it touched.
+	 *
+	 * @return array{markdown: string, url: string}
+	 * @throws TrackerException
+	 */
+	public function uploadInline(string $userId, string $ref, string $filename, string $mimeType, string $content): array {
+		[$client, $connection, $parts] = $this->resolve($userId, $ref);
+		if (!$client->supportsInlineUpload()) {
+			throw new TrackerException('Inline upload is not supported for this tracker');
+		}
+		return $client->uploadInline($connection, $parts, $filename, $mimeType, $content);
+	}
+
+	/**
 	 * @throws TrackerException
 	 */
 	public function deleteAttachment(string $userId, string $ref, string $attachmentId): void {

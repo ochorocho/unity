@@ -414,4 +414,9 @@ class GithubClientTest extends TestCase {
 		$this->assertStringContainsString('/repos/octocat/Hello-World/issues/1/sub_issue', $captured['url']);
 		$this->assertSame(900, json_decode($captured['options']['body'], true)['sub_issue_id']);
 	}
+
+	public function testDoesNotSupportInlineUpload(): void {
+		// GitHub has no token-accessible upload API; inline upload stays disabled.
+		$this->assertFalse($this->client->supportsInlineUpload());
+	}
 }

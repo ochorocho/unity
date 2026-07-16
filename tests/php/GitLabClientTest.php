@@ -180,6 +180,95 @@ class GitLabClientTest extends TestCase {
 		$this->client->fetchFile($this->connection, ['project' => '42'], 'https://evil.example/x.png');
 	}
 
+	public function testFetchFileResolvesAbsoluteUploadViaApi(): void {
+		// /api/v4/markdown renders uploads as absolute web URLs. Those Rails routes
+		// take a session cookie, not PRIVATE-TOKEN, so a private project's upload
+		// must be re-pointed at the uploads API or it 302s to the sign-in page.
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['url' => $u, 'options' => $o];
+			return $this->response(200, 'BYTES', ['Content-Type' => 'image/png']);
+		});
+		$file = $this->client->fetchFile(
+			$this->connection,
+			['project' => '42', 'iid' => '7', 'path' => 'group/app'],
+			'https://gitlab.com/group/app/uploads/deadbeef/pic.png',
+		);
+		$this->assertSame('https://gitlab.com/api/v4/projects/group%2Fapp/uploads/deadbeef/pic.png', $captured['url']);
+		$this->assertSame('tok', $captured['options']['headers']['PRIVATE-TOKEN']);
+		$this->assertArrayNotHasKey('Content-Type', $captured['options']['headers']);
+		$this->assertSame('BYTES', $file['body']);
+		$this->assertSame('image/png', $file['contentType']);
+	}
+
+	public function testFetchFileDoesNotDoubleEncodeUploadFilename(): void {
+		// The rendered form arrives percent-encoded; re-encoding it would 404.
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, 'BYTES', ['Content-Type' => 'image/png']);
+		});
+		$this->client->fetchFile($this->connection, ['project' => '42'],
+			'https://gitlab.com/group/app/uploads/deadbeef/my%20pic.png');
+		$this->assertStringEndsWith('/uploads/deadbeef/my%20pic.png', $captured);
+	}
+
+	public function testFetchFileRejectsForeignHostUpload(): void {
+		// The SSRF guard must run before the upload rewrite, or a foreign upload URL
+		// would be laundered into an API URL on our own host.
+		$this->expectException(TrackerException::class);
+		$this->client->fetchFile($this->connection, ['project' => '42'],
+			'https://evil.example/group/app/uploads/deadbeef/pic.png');
+	}
+
+	public function testFetchFileKeepsSystemUploadUrl(): void {
+		// /uploads/-/system/… avatars have no upload secret and aren't in the uploads
+		// API; they stay on the web URL, which serves them anonymously.
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, 'BYTES', ['Content-Type' => 'image/png']);
+		});
+		$this->client->fetchFile($this->connection, ['project' => '42'],
+			'https://gitlab.com/uploads/-/system/user/avatar/1/avatar.png');
+		$this->assertSame('https://gitlab.com/uploads/-/system/user/avatar/1/avatar.png', $captured);
+	}
+
+	public function testFetchFileKeepsGroupUploadUrl(): void {
+		// Group uploads use a different secret namespace than project uploads, so
+		// routing them at /projects/{id}/uploads would 404.
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = $u;
+			return $this->response(200, 'BYTES', ['Content-Type' => 'image/png']);
+		});
+		$this->client->fetchFile($this->connection, ['project' => '42'],
+			'https://gitlab.com/groups/grp/-/uploads/deadbeef/pic.png');
+		$this->assertSame('https://gitlab.com/groups/grp/-/uploads/deadbeef/pic.png', $captured);
+	}
+
+	public function testFetchFileRejectsSignInPage(): void {
+		// A token-only fetch of a private Rails route follows the 302 to /users/sign_in
+		// and arrives as a 200 HTML page — it must fail loudly, not be served as an image.
+		$this->http->method('request')->willReturnCallback(
+			fn ($m, $u, $o) => $this->response(200, '<html>Sign in</html>', ['Content-Type' => 'text/html; charset=utf-8']),
+		);
+		$this->expectException(TrackerException::class);
+		$this->client->fetchFile($this->connection, ['project' => '42'],
+			'https://gitlab.com/uploads/-/system/user/avatar/1/avatar.png');
+	}
+
+	public function testFetchFileAllowsHtmlFromUploadsApi(): void {
+		// The sign-in guard is scoped to passthrough routes: HTML from the uploads
+		// API is a genuinely uploaded .html file.
+		$this->http->method('request')->willReturnCallback(
+			fn ($m, $u, $o) => $this->response(200, '<html>real</html>', ['Content-Type' => 'text/html; charset=utf-8']),
+		);
+		$file = $this->client->fetchFile($this->connection, ['project' => '42'],
+			'https://gitlab.com/group/app/uploads/deadbeef/page.html');
+		$this->assertSame('<html>real</html>', $file['body']);
+	}
+
 	public function testUpdateCommentPutsNote(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
@@ -559,5 +648,41 @@ class GitLabClientTest extends TestCase {
 		$this->client->deleteRelation($this->connection, ['project' => '12', 'iid' => '5', 'path' => 'grp/app'], '100');
 		$this->assertSame('DELETE', $captured['method']);
 		$this->assertStringContainsString('/projects/12/issues/5/links/100', $captured['url']);
+	}
+
+	public function testSupportsInlineUpload(): void {
+		$this->assertTrue($this->client->supportsInlineUpload());
+	}
+
+	public function testUploadInlinePostsMultipartAndReturnsMarkdown(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$captured = ['method' => $m, 'url' => $u, 'options' => $o];
+			return $this->response(201, [
+				'alt' => 'pic',
+				'url' => '/uploads/deadbeef/pic.png',
+				'markdown' => '![pic](/uploads/deadbeef/pic.png)',
+			]);
+		});
+
+		$result = $this->client->uploadInline(
+			$this->connection,
+			['project' => '42', 'iid' => '7', 'path' => 'group/app'],
+			'pic.png',
+			'image/png',
+			'BINARY',
+		);
+
+		$this->assertSame('POST', $captured['method']);
+		$this->assertStringContainsString('/api/v4/projects/42/uploads', $captured['url']);
+		$this->assertSame('tok', $captured['options']['headers']['PRIVATE-TOKEN']);
+		// Multipart upload must not carry the JSON Content-Type from authHeaders().
+		$this->assertArrayNotHasKey('Content-Type', $captured['options']['headers']);
+		$this->assertSame('file', $captured['options']['multipart'][0]['name']);
+		$this->assertSame('pic.png', $captured['options']['multipart'][0]['filename']);
+		$this->assertSame('BINARY', $captured['options']['multipart'][0]['contents']);
+		$this->assertSame('image/png', $captured['options']['multipart'][0]['headers']['Content-Type']);
+		$this->assertSame('![pic](/uploads/deadbeef/pic.png)', $result['markdown']);
+		$this->assertSame('/uploads/deadbeef/pic.png', $result['url']);
 	}
 }

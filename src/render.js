@@ -29,12 +29,27 @@ export function sanitizeHtml(html, ref) {
 
 	const hook = (node) => {
 		if (node.tagName === 'IMG') {
-			const src = node.getAttribute('src') || ''
+			// GitLab's ImageLazyLoadFilter parks the real URL in data-src and leaves a
+			// 1x1 transparent GIF in src; its lazy-loader is GitLab's own frontend JS,
+			// which never runs here, so the placeholder would be all that ever renders.
+			// Promote data-src and drop it, so what remains is a plain, already-loaded
+			// <img> pointing at the proxy.
+			const lazySrc = node.getAttribute('data-src') || ''
+			const src = lazySrc || node.getAttribute('src') || ''
 			if (src && !/^data:/i.test(src) && !src.startsWith(base)) {
 				node.setAttribute('src', `${base}?src=${encodeURIComponent(src)}`)
+				node.removeAttribute('data-src')
 			}
 		}
 		if (node.tagName === 'A') {
+			const href = node.getAttribute('href') || ''
+			// GitLab wraps each inline image in a link to its upstream upload URL, and
+			// links uploaded files the same way; both need the token-authenticated proxy
+			// that <img src> already goes through, or they open a login page. Matched by
+			// upload shape so ordinary links (and other trackers) are never touched.
+			if (/\/uploads\/[0-9a-f]+\/[^/]+$/i.test(href) && !href.startsWith(base)) {
+				node.setAttribute('href', `${base}?src=${encodeURIComponent(href)}`)
+			}
 			node.setAttribute('target', '_blank')
 			node.setAttribute('rel', 'noopener noreferrer')
 		}

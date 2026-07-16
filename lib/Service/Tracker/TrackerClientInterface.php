@@ -76,6 +76,12 @@ interface TrackerClientInterface {
 	/** Whether this tracker exposes a structured attachment list + upload. */
 	public function supportsAttachments(): bool;
 
+	/**
+	 * Whether this tracker supports inline file upload (dragging a file into the
+	 * editor), returning embeddable markdown rather than a structured attachment.
+	 */
+	public function supportsInlineUpload(): bool;
+
 	/** Whether this tracker supports creating new issues. */
 	public function supportsCreate(): bool;
 
@@ -124,6 +130,16 @@ interface TrackerClientInterface {
 	 * @param string $content raw file bytes
 	 */
 	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment;
+
+	/**
+	 * Upload a file for inline embedding in a body and return the markdown/url the
+	 * editor inserts (e.g. GitLab's /uploads endpoint).
+	 *
+	 * @param array $refParts
+	 * @param string $content raw file bytes
+	 * @return array{markdown: string, url: string}
+	 */
+	public function uploadInline(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): array;
 
 	/**
 	 * Delete an attachment by its provider id.

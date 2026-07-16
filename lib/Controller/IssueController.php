@@ -155,6 +155,34 @@ class IssueController extends Controller {
 		}
 	}
 
+	/**
+	 * Upload a file to the tracker for inline embedding in a body (e.g. GitLab's
+	 * /uploads endpoint) and return the markdown snippet the editor inserts.
+	 */
+	#[NoAdminRequired]
+	public function uploadInline(string $ref): DataResponse {
+		$file = $this->request->getUploadedFile('file');
+		if (!is_array($file) || (int)($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+			return new DataResponse(['error' => 'No file uploaded'], Http::STATUS_BAD_REQUEST);
+		}
+		$content = file_get_contents((string)$file['tmp_name']);
+		if ($content === false) {
+			return new DataResponse(['error' => 'Could not read uploaded file'], Http::STATUS_BAD_REQUEST);
+		}
+		try {
+			$result = $this->issueService->uploadInline(
+				$this->userId ?? '',
+				$ref,
+				(string)($file['name'] ?? 'file'),
+				(string)($file['type'] ?? '') ?: 'application/octet-stream',
+				$content,
+			);
+			return new DataResponse($result, Http::STATUS_CREATED);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
 	#[NoAdminRequired]
 	public function deleteAttachment(string $ref, string $attachmentId): DataResponse {
 		try {

@@ -26,7 +26,11 @@
 					{{ a.label }}
 				</button>
 			</div>
-			<div class="unity-editor-input" :style="{ '--unity-editor-min-height': minHeight }">
+			<div class="unity-editor-input"
+				:style="{ '--unity-editor-min-height': minHeight }"
+				@dragover="onDragOver"
+				@drop="onDrop"
+				@paste="onPaste">
 				<NcRichContenteditable ref="editor"
 					:model-value="modelValue"
 					:label="placeholder"
@@ -48,10 +52,15 @@
 <script>
 import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
+import { showError } from '@nextcloud/dialogs'
 import NcRichContenteditable from '@nextcloud/vue/components/NcRichContenteditable'
 import RenderedText from './RenderedText.vue'
 import { trackerById } from '../trackers.js'
 import { toolbarFor, actionText } from '../editor.js'
+
+// Monotonic id for inline-upload placeholders, unique across all editor instances
+// so concurrent uploads never collide on their `](uploading-<id>)` anchor.
+let uploadUid = 0
 
 export default {
 	name: 'MarkupEditor',
@@ -107,6 +116,11 @@ export default {
 		},
 		mentionsEnabled() {
 			return trackerById(this.tracker).mention
+		},
+		// Inline file upload (drag/paste into the editor) is only offered for trackers
+		// with an upload endpoint (GitLab) and when we have an issue ref to scope it to.
+		uploadEnabled() {
+			return trackerById(this.tracker).inlineUpload && !!this.issueRef
 		},
 		minHeight() {
 			return Math.max(3, this.rows) * 1.4 + 'em'
@@ -203,6 +217,85 @@ export default {
 					return item
 				}))
 			}).catch(() => callback([]))
+		},
+		/** True while a file (not text/other) is being dragged. */
+		isFileDrag(e) {
+			const types = e.dataTransfer && e.dataTransfer.types
+			return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1
+		},
+		onDragOver(e) {
+			// preventDefault marks the editor as a valid file drop target.
+			if (this.uploadEnabled && this.isFileDrag(e)) {
+				e.preventDefault()
+			}
+		},
+		onDrop(e) {
+			if (!this.uploadEnabled) {
+				return
+			}
+			const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : []
+			if (!files.length) {
+				return
+			}
+			// Handle it here; don't let it bubble to IssueDetail's attachment dropzone.
+			e.preventDefault()
+			e.stopPropagation()
+			this.uploadFiles(files)
+		},
+		onPaste(e) {
+			if (!this.uploadEnabled) {
+				return
+			}
+			const files = e.clipboardData ? Array.from(e.clipboardData.files) : []
+			if (!files.length) {
+				return // let the editor handle a normal text paste
+			}
+			e.preventDefault()
+			this.uploadFiles(files)
+		},
+		/** Upload dropped/pasted files one at a time, inserting each result at the caret. */
+		async uploadFiles(files) {
+			for (const file of files) {
+				await this.uploadOne(file)
+			}
+		},
+		async uploadOne(file) {
+			const id = ++uploadUid
+			// Strip []() from the shown name so the placeholder's markdown stays parseable.
+			const safeName = (file.name || 'file').replace(/[[\]()]/g, '')
+			const placeholder = `![${this.t('unity', 'Uploading {name}…', { name: safeName })}](uploading-${id})`
+			this.insertAtCaret(placeholder + '\n')
+			try {
+				const fd = new FormData()
+				fd.append('file', file)
+				const { data } = await axios.post(generateUrl('/apps/unity/issues/{ref}/upload', { ref: this.issueRef }), fd)
+				const md = data && data.markdown ? data.markdown : ''
+				this.replacePlaceholder(id, md ? md + '\n' : '')
+			} catch (e) {
+				this.replacePlaceholder(id, '')
+				showError(e?.response?.data?.error || this.t('unity', 'Could not upload {name}', { name: file.name }))
+			}
+		},
+		/** Insert text at the caret, mirroring apply()'s execCommand approach. */
+		insertAtCaret(text) {
+			const el = this.editorEl()
+			if (!el) {
+				this.$emit('update:modelValue', (this.modelValue || '') + text)
+				return
+			}
+			if (document.activeElement !== el) {
+				el.focus()
+			}
+			document.execCommand('insertText', false, text)
+		},
+		/**
+		 * Swap the upload placeholder for its final markdown (or remove it on failure).
+		 * Matches on the unique `](uploading-<id>)` anchor so it works regardless of
+		 * where the caret has since moved or how the filename rendered.
+		 */
+		replacePlaceholder(id, replacement) {
+			const re = new RegExp('!\\[[^\\]]*\\]\\(uploading-' + id + '\\)\\n?')
+			this.$emit('update:modelValue', (this.modelValue || '').replace(re, replacement))
 		},
 	},
 }

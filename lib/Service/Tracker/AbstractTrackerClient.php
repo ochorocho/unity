@@ -41,6 +41,14 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 		return false;
 	}
 
+	/**
+	 * Default: no inline file upload (dragging a file into the editor). Overridden
+	 * by trackers with an upload endpoint that returns embeddable markdown (GitLab).
+	 */
+	public function supportsInlineUpload(): bool {
+		return false;
+	}
+
 	/** Default: no issue relations. Overridden by trackers with a relations API. */
 	public function supportsRelations(): bool {
 		return false;
@@ -128,6 +136,17 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	 */
 	public function uploadAttachment(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): Attachment {
 		throw new TrackerException('Attachments are not supported for this tracker');
+	}
+
+	/**
+	 * Default: inline upload is unsupported. Trackers with an upload endpoint that
+	 * returns embeddable markdown (e.g. GitLab /uploads) override this.
+	 *
+	 * @param array $refParts
+	 * @return array{markdown: string, url: string}
+	 */
+	public function uploadInline(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): array {
+		throw new TrackerException('Inline upload is not supported for this tracker');
 	}
 
 	/**

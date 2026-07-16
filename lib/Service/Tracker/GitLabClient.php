@@ -28,6 +28,10 @@ class GitLabClient extends AbstractTrackerClient {
 		return 'gitlab';
 	}
 
+	public function supportsInlineUpload(): bool {
+		return true;
+	}
+
 	private function apiRoot(Connection $connection): string {
 		return rtrim($connection->baseUrl, '/') . '/api/v4';
 	}
@@ -172,6 +176,38 @@ class GitLabClient extends AbstractTrackerClient {
 		);
 		$comment->renderedBody = $this->renderMarkdown($connection, $newBody, (string)($refParts['path'] ?? ''));
 		return $comment;
+	}
+
+	/**
+	 * Upload a file to the project's markdown store (POST /projects/:id/uploads) and
+	 * return GitLab's ready-made `![name](/uploads/<hash>/name)` markdown, which the
+	 * editor inserts and GitLab resolves against the same project on render.
+	 *
+	 * @param array $refParts
+	 * @return array{markdown: string, url: string}
+	 */
+	public function uploadInline(Connection $connection, array $refParts, string $filename, string $mimeType, string $content): array {
+		$project = rawurlencode((string)($refParts['project'] ?? ''));
+		// Multipart upload; must not send the JSON Content-Type from authHeaders().
+		$auth = $this->authHeaders($connection);
+		unset($auth['Content-Type']);
+		$headers = ['User-Agent' => Application::USER_AGENT] + $auth;
+		$data = $this->json(
+			$this->request('POST', $this->apiRoot($connection) . '/projects/' . $project . '/uploads', [
+				'headers' => $headers,
+				'multipart' => [[
+					'name' => 'file',
+					'contents' => $content,
+					'filename' => $filename,
+					'headers' => ['Content-Type' => $mimeType !== '' ? $mimeType : 'application/octet-stream'],
+				]],
+			], $connection),
+			'Upload file',
+		);
+		return [
+			'markdown' => (string)($data['markdown'] ?? ''),
+			'url' => (string)($data['url'] ?? ''),
+		];
 	}
 
 	public function logTime(Connection $connection, array $refParts, int $seconds, string $comment, ?string $startedAt): void {
@@ -680,26 +716,115 @@ class GitLabClient extends AbstractTrackerClient {
 		return ['PRIVATE-TOKEN' => $connection->token];
 	}
 
+	/**
+	 * GitLab's Rails upload/asset routes authenticate by session cookie, not by
+	 * PRIVATE-TOKEN: a token-only GET of a private file 302s to /users/sign_in,
+	 * which — because redirects are followed — arrives as a perfectly successful
+	 * HTTP 200 text/html login page and renders as a broken image. resolveFileUrl()
+	 * keeps project uploads off those routes; this catches whatever still lands
+	 * there, so the failure surfaces as a logged 404 rather than a login page
+	 * served as a file.
+	 *
+	 * Scoped to passthrough URLs: HTML fetched from the uploads API is a real file.
+	 *
+	 * @param array $refParts
+	 * @return array{body: string, contentType: string}
+	 */
+	public function fetchFile(Connection $connection, array $refParts, string $src): array {
+		$file = parent::fetchFile($connection, $refParts, $src);
+		$viaApi = $this->uploadApiUrl($connection, $refParts, (string)parse_url(trim($src), PHP_URL_PATH)) !== null;
+		if (!$viaApi && str_starts_with(strtolower(trim($file['contentType'])), 'text/html')) {
+			$this->logger->warning('Unity: GitLab returned HTML for file ' . $src . ' — not authenticated for this route?');
+			throw new TrackerException('File fetch failed (HTML returned instead of file)');
+		}
+		return $file;
+	}
+
 	protected function resolveFileUrl(Connection $connection, array $refParts, string $src): string {
 		$src = trim($src);
 		if ($src === '') {
 			throw new TrackerException('Empty file source');
 		}
-		if (preg_match('#^https?://#i', $src) !== 1) {
-			// Project-relative upload: /uploads/{secret}/{filename} → uploads API.
-			if (preg_match('#/uploads/([0-9a-fA-F]+)/(.+)$#', $src, $m) === 1) {
-				$projectId = rawurlencode((string)($refParts['project'] ?? ''));
-				return $this->apiRoot($connection) . '/projects/' . $projectId
-					. '/uploads/' . $m[1] . '/' . rawurlencode($m[2]);
+		$absolute = preg_match('#^https?://#i', $src) === 1;
+		if ($absolute) {
+			// SSRF guard, before any rewrite: only ever fetch from the instance we
+			// hold a token for.
+			$host = strtolower((string)parse_url($src, PHP_URL_HOST));
+			$baseHost = strtolower((string)parse_url($connection->baseUrl, PHP_URL_HOST));
+			if ($host === '' || $host !== $baseHost) {
+				throw new TrackerException('File host not allowed');
 			}
+		}
+		// Both forms of an upload link carry the same path, so resolve on the path
+		// alone: `/uploads/{secret}/{file}` (raw Markdown, as POST /uploads returns
+		// it) and `https://host/{group}/{project}/uploads/{secret}/{file}` (what
+		// /api/v4/markdown renders, since it renders with only_path:false).
+		$api = $this->uploadApiUrl($connection, $refParts, (string)parse_url($src, PHP_URL_PATH));
+		if ($api !== null) {
+			return $api;
+		}
+		if (!$absolute) {
 			throw new TrackerException('Unsupported relative file path');
 		}
-		$host = strtolower((string)parse_url($src, PHP_URL_HOST));
-		$baseHost = strtolower((string)parse_url($connection->baseUrl, PHP_URL_HOST));
-		if ($host === '' || $host !== $baseHost) {
-			throw new TrackerException('File host not allowed');
-		}
+		// Not a project upload: a same-host asset (e.g. /uploads/-/system/… avatars),
+		// which GitLab serves without authentication.
 		return $src;
+	}
+
+	/**
+	 * Map a GitLab project-upload path to `GET /api/v4/projects/{id}/uploads/{secret}/{filename}`,
+	 * the only route that honours PRIVATE-TOKEN. The link itself points at a Rails
+	 * web route that authenticates by session cookie, so a token-only fetch of a
+	 * private project's upload is redirected to the sign-in page and never reaches
+	 * the bytes.
+	 *
+	 * Returns null when the path is not a project upload, keeping `/uploads/-/system/…`
+	 * avatars (no upload secret) and group uploads (a separate secret namespace) on
+	 * their plain, publicly served web URL.
+	 *
+	 * @param array $refParts
+	 */
+	private function uploadApiUrl(Connection $connection, array $refParts, string $path): ?string {
+		// GitLab under a relative URL root (baseUrl https://host/gitlab) prefixes
+		// rendered paths with it; strip it so the match group is the project path alone.
+		$basePath = rtrim((string)parse_url($connection->baseUrl, PHP_URL_PATH), '/');
+		if ($basePath !== '' && str_starts_with($path, $basePath . '/')) {
+			$path = substr($path, strlen($basePath));
+		}
+		if (str_contains($path, '/-/uploads/')) {
+			// /groups/{group}/-/uploads/… — a group upload, not a project one.
+			return null;
+		}
+		if (preg_match('#^(.*)/uploads/([0-9a-fA-F]+)/([^/]+)$#', $path, $m) !== 1) {
+			return null;
+		}
+		$project = $this->uploadProject($refParts, $m[1]);
+		if ($project === '') {
+			return null;
+		}
+		// The rendered form is percent-encoded; decode first so re-encoding can't
+		// double-escape (`my pic.png` → `my%20pic.png`, never `my%2520pic.png`).
+		return $this->apiRoot($connection) . '/projects/' . rawurlencode($project)
+			. '/uploads/' . $m[2] . '/' . rawurlencode(rawurldecode($m[3]));
+	}
+
+	/**
+	 * The project that owns an upload. The rendered web form carries it in the path
+	 * (`/{group}/{project}/uploads/{secret}/…`) and it isn't always the issue's own
+	 * project — a description can re-use an upload pasted from elsewhere — so prefer
+	 * it, falling back to the ref's numeric project id, which is all the root-relative
+	 * `/uploads/…` form gives us.
+	 *
+	 * @param array $refParts
+	 */
+	private function uploadProject(array $refParts, string $prefix): string {
+		$prefix = trim($prefix, '/');
+		// A project full path always has a namespace segment, and `-` is a reserved
+		// top-level route (e.g. /-/project/42/uploads/…), never a namespace.
+		if ($prefix !== '' && str_contains($prefix, '/') && !str_starts_with($prefix, '-/')) {
+			return $prefix;
+		}
+		return (string)($refParts['project'] ?? '');
 	}
 
 	/**

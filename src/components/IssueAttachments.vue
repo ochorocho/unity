@@ -64,19 +64,11 @@
 		</ul>
 		<p v-else class="unity-attachments-empty">{{ t('unity', 'No attachments.') }}</p>
 
-		<NcDialog v-if="preview"
+		<FilePreview v-if="preview"
+			:src="proxy(preview.src)"
 			:name="preview.filename"
-			size="large"
-			@closing="preview = null">
-			<div class="unity-preview" :class="{ 'unity-preview--doc': isDocument(preview) }">
-				<img v-if="isImage(preview)" :src="proxy(preview.src)" :alt="preview.filename">
-				<!-- eslint-disable-next-line vue/html-self-closing -->
-				<video v-else-if="isVideo(preview)" :src="proxy(preview.src)" controls></video>
-				<!-- eslint-disable-next-line vue/html-self-closing -->
-				<audio v-else-if="isAudio(preview)" :src="proxy(preview.src)" controls></audio>
-				<iframe v-else :src="proxy(preview.src)" :title="preview.filename" class="unity-preview-frame" />
-			</div>
-		</NcDialog>
+			:kind="previewKind(preview)"
+			@close="preview = null" />
 	</div>
 </template>
 
@@ -86,7 +78,7 @@ import { generateUrl } from '@nextcloud/router'
 import { showConfirmation, showError, showSuccess } from '@nextcloud/dialogs'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
-import NcDialog from '@nextcloud/vue/components/NcDialog'
+import FilePreview from './FilePreview.vue'
 import Paperclip from 'vue-material-design-icons/Paperclip.vue'
 import Download from 'vue-material-design-icons/Download.vue'
 import Delete from 'vue-material-design-icons/Delete.vue'
@@ -95,7 +87,7 @@ import FilePdfBox from 'vue-material-design-icons/FilePdfBox.vue'
 
 export default {
 	name: 'IssueAttachments',
-	components: { NcButton, NcLoadingIcon, NcDialog, Paperclip, Download, Delete, FileIcon, FilePdfBox },
+	components: { NcButton, NcLoadingIcon, FilePreview, Paperclip, Download, Delete, FileIcon, FilePdfBox },
 	props: {
 		issueRef: { type: String, required: true },
 		reloadKey: { type: Number, default: 0 },
@@ -122,22 +114,8 @@ export default {
 	},
 	mounted() {
 		this.fetch()
-		// Own Escape while the preview is open so it closes the modal only — not the
-		// issue detail behind it (App.vue's global Escape handler closes that). Capture
-		// phase runs before the bubbling window listeners in App.vue and NcModal.
-		window.addEventListener('keydown', this.onPreviewKeydown, true)
-	},
-	beforeUnmount() {
-		window.removeEventListener('keydown', this.onPreviewKeydown, true)
 	},
 	methods: {
-		onPreviewKeydown(e) {
-			if (e.key === 'Escape' && this.preview) {
-				this.preview = null
-				e.stopPropagation()
-				e.preventDefault()
-			}
-		},
 		proxy(src) {
 			const ref = encodeURIComponent(this.issueRef)
 			return generateUrl('/apps/unity/issues/{ref}/file', { ref }) + '?src=' + encodeURIComponent(src)
@@ -160,13 +138,23 @@ export default {
 		isText(a) {
 			return this.mimeType(a).startsWith('text/')
 		},
-		// PDF/text render in an iframe (the browser's built-in viewer).
-		isDocument(a) {
-			return this.isPdf(a) || this.isText(a)
-		},
 		// Types the browser can render inline in the preview modal.
 		previewable(a) {
 			return this.isImage(a) || this.isVideo(a) || this.isAudio(a) || this.isPdf(a) || this.isText(a)
+		},
+		// Which element the preview modal renders. Only previewable() types get here,
+		// so the fallback is always PDF/text — an iframe with the browser's own viewer.
+		previewKind(a) {
+			if (this.isImage(a)) {
+				return 'image'
+			}
+			if (this.isVideo(a)) {
+				return 'video'
+			}
+			if (this.isAudio(a)) {
+				return 'audio'
+			}
+			return 'document'
 		},
 		thumbUrl(a) {
 			return this.proxy(a.thumbnailSrc || a.src)
@@ -356,29 +344,5 @@ export default {
 	color: var(--color-text-maxcontrast);
 	font-size: 0.9em;
 	margin-top: 8px;
-}
-.unity-preview {
-	display: flex;
-	justify-content: center;
-	padding: 12px;
-}
-.unity-preview img,
-.unity-preview video {
-	max-width: 100%;
-	max-height: 75vh;
-	object-fit: contain;
-}
-.unity-preview audio {
-	width: 100%;
-}
-/* PDF/text fill the dialog with the browser's own viewer. */
-.unity-preview--doc {
-	display: block;
-	padding: 0;
-}
-.unity-preview-frame {
-	width: 100%;
-	height: 75vh;
-	border: none;
 }
 </style>

@@ -407,9 +407,15 @@ export default {
 			this.setHashRef('')
 		},
 		onKeydown(e) {
-			// Close the detail on Escape — unless a modal (e.g. Log time) is open,
-			// which handles Escape itself.
-			if (e.key === 'Escape' && this.selected && !document.querySelector('.modal-mask')) {
+			// Close the detail on Escape — unless something else already consumed this
+			// Escape, which is what a dialog closing itself does (NcModal and our
+			// FilePreview both preventDefault). Checking the event is what makes this
+			// deterministic; the `.modal-mask` probe alone is not enough, because the
+			// DOM runs a microtask checkpoint after every listener, so Vue has already
+			// flushed the dialog's unmount — and removed the mask — before this
+			// bubble-phase listener runs. The mask is therefore reliably *absent* on the
+			// very press that closed a dialog, which is precisely when we must not act.
+			if (e.key === 'Escape' && this.selected && !e.defaultPrevented && !document.querySelector('.modal-mask')) {
 				this.closeDetail()
 			}
 		},
