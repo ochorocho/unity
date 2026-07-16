@@ -15,6 +15,7 @@ use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\ContentSecurityPolicy;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IRequest;
 
 class PageController extends Controller {
@@ -23,6 +24,7 @@ class PageController extends Controller {
 		string $appName,
 		IRequest $request,
 		private IInitialState $initialState,
+		private IEventDispatcher $eventDispatcher,
 		private ?string $userId,
 	) {
 		parent::__construct($appName, $request);
@@ -34,6 +36,14 @@ class PageController extends Controller {
 		$this->initialState->provideInitialState('unity-initial-state', [
 			'userId' => $this->userId,
 		]);
+		// Load the Viewer app's scripts onto this page so OCA.Viewer.open() is available
+		// client-side (issue images and previewable attachments open in it). Its LoadViewer
+		// listeners also pull in the PDF and text viewers. Guarded: the Viewer app can be
+		// disabled. dispatchTyped() runs Util::addScript(), which registers into the same
+		// page-script list this TemplateResponse renders.
+		if (class_exists(\OCA\Viewer\Event\LoadViewer::class)) {
+			$this->eventDispatcher->dispatchTyped(new \OCA\Viewer\Event\LoadViewer());
+		}
 		$response = new TemplateResponse(Application::APP_ID, 'main');
 		// Allow same-origin framing so previewable attachments (PDF, text) can render
 		// in an iframe pointing at the credential-proxied /file endpoint. The default

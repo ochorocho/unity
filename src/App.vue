@@ -240,12 +240,13 @@ export default {
 			this.setHashRef(ref)
 			this.loadSelected(ref)
 		}
-		window.addEventListener('keydown', this.onKeydown)
+		// Capture phase: see onKeydown — it must observe the DOM before any dialog reacts.
+		window.addEventListener('keydown', this.onKeydown, true)
 	},
 	beforeUnmount() {
 		window.removeEventListener('popstate', this.onHistoryStrip)
 		window.removeEventListener('hashchange', this.onHistoryStrip)
-		window.removeEventListener('keydown', this.onKeydown)
+		window.removeEventListener('keydown', this.onKeydown, true)
 	},
 	methods: {
 		trackerColor(id) {
@@ -407,14 +408,22 @@ export default {
 			this.setHashRef('')
 		},
 		onKeydown(e) {
-			// Close the detail on Escape — unless something else already consumed this
-			// Escape, which is what a dialog closing itself does (NcModal and our
-			// FilePreview both preventDefault). Checking the event is what makes this
-			// deterministic; the `.modal-mask` probe alone is not enough, because the
-			// DOM runs a microtask checkpoint after every listener, so Vue has already
-			// flushed the dialog's unmount — and removed the mask — before this
-			// bubble-phase listener runs. The mask is therefore reliably *absent* on the
-			// very press that closed a dialog, which is precisely when we must not act.
+			// Close the detail on Escape — but never on the same press that closed a dialog.
+			//
+			// This listener is registered in the CAPTURE phase, and that is what makes the
+			// check below sound: window is the first node in the propagation path, so we run
+			// before any dialog reacts and the open dialog's mask is still in the DOM. From
+			// the bubble phase it was a race we lost: the DOM runs a microtask checkpoint
+			// after every listener, so Vue had already flushed the closing dialog's unmount
+			// and removed the mask — the probe read "no dialog" on exactly the press we had
+			// to ignore, which closed the detail along with every dialog (Log time included).
+			//
+			// The `.modal-mask` probe is what protects every dialog — our NcDialogs and the
+			// Nextcloud Viewer's own NcModal both render that mask, and it's still in the DOM
+			// when this capture-phase handler runs. The extra defaultPrevented check is
+			// belt-and-braces: NcModal does NOT set it (useHotKey only preventDefaults when
+			// asked, and registers passive), but a future component that consumes Escape would
+			// be honoured too.
 			if (e.key === 'Escape' && this.selected && !e.defaultPrevented && !document.querySelector('.modal-mask')) {
 				this.closeDetail()
 			}

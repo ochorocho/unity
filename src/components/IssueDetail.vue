@@ -1,5 +1,6 @@
 <template>
 	<div class="unity-detail"
+		@click="onDetailClick"
 		@dragover="onDragOver"
 		@dragleave="onDragLeave"
 		@drop="onDrop">
@@ -123,6 +124,13 @@ import IssueRelations from './IssueRelations.vue'
 import IssueEdit from './IssueEdit.vue'
 import { trackerById } from '../trackers.js'
 import { humanizeDuration } from '../duration.js'
+import { originalSrc, filenameFromUrl } from '../fileurl.js'
+import { viewerOpen, mimeFromName } from '../viewer.js'
+
+// Every image in the issue body — description first, then comments (querySelectorAll
+// returns document order). Scoped to those two containers so the attachment thumbnails
+// and the editor's preview tab, both also inside .unity-detail, are not swept in.
+const GALLERY_IMAGES = '.unity-description img:not(.emoji):not(.emoticon), .unity-comment-body img:not(.emoji):not(.emoticon)'
 
 export default {
 	name: 'IssueDetail',
@@ -192,6 +200,33 @@ export default {
 		onEditRecord(record) {
 			this.editRecord = record
 			this.showLogModal = true
+		},
+		// Open any body image in the preview, as a gallery over every image in the issue.
+		// Delegated from the root so it covers the description and all comments — including
+		// ones added or re-rendered later — with a single listener.
+		onDetailClick(e) {
+			const img = e.target.closest && e.target.closest('img:not(.emoji):not(.emoticon)')
+			if (!img || !img.closest('.unity-description, .unity-comment-body')) {
+				return
+			}
+			const els = [...this.$el.querySelectorAll(GALLERY_IMAGES)].filter((el) => el.getAttribute('src'))
+			const index = els.indexOf(img)
+			if (index === -1) {
+				return
+			}
+			// GitLab wraps inline images in an <a> to the upload URL and sanitizeHtml() gives
+			// every anchor target="_blank": without this the browser opens a new tab.
+			e.preventDefault()
+			viewerOpen(els.map((el) => this.imageItem(el)), index)
+		},
+		// A rendered <img> src is ALREADY a proxy URL, so it is passed through unresolved. The
+		// name doubles as the download filename, so prefer the upstream filename over alt —
+		// GitLab emits a generic alt ("image") that would save a file with no extension. Inline
+		// images carry no mime, so it is derived from the name.
+		imageItem(el) {
+			const src = el.getAttribute('src')
+			const name = filenameFromUrl(originalSrc(src)) || el.getAttribute('alt') || 'image'
+			return { src, name, mime: mimeFromName(name) }
 		},
 		onLogClosing() {
 			this.showLogModal = false
@@ -359,6 +394,12 @@ export default {
 	padding: 12px;
 	margin-bottom: 16px;
 	overflow-wrap: anywhere;
+}
+/* Body images open the gallery (onDetailClick). Scoped to the containers that handler
+   actually acts on, so nothing else advertises a zoom it won't perform. Emoji and Jira
+   Server emoticons are decoration, not content — excluded here and in the handler. */
+.unity-description :deep(img:not(.emoji):not(.emoticon)) {
+	cursor: zoom-in;
 }
 .unity-time {
 	margin-bottom: 16px;

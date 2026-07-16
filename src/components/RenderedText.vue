@@ -1,36 +1,24 @@
 <template>
-	<!-- Single root: a fragment root can't inherit fallthrough attributes, which would
-	     silently drop the class and scoped-style attribute CommentList passes down.
-	     It also gives the image-click delegation one place to live instead of four. -->
-	<div class="unity-rendered-root" @click="onRootClick">
-		<!-- eslint-disable-next-line vue/no-v-html -->
-		<div v-if="rendered" ref="htmlRoot" class="unity-rendered unity-html" :class="{ 'unity-tasks-editable': editable }" v-html="renderedSafe" @click="onRenderedTodo" />
-		<div v-else-if="format === 'markdown'" ref="mdRoot" class="unity-rendered">
-			<NcRichText :text="markdownText"
-				:use-markdown="true"
-				:use-extended-markdown="true"
-				:interactive="editable"
-				@interact-todo="onInteractTodo" />
-		</div>
-		<!-- eslint-disable-next-line vue/no-v-html -->
-		<div v-else-if="format === 'textile'" ref="textileRoot" class="unity-rendered unity-textile" v-html="textileHtml" />
-		<!-- eslint-disable-next-line vue/no-v-html -->
-		<div v-else-if="format === 'html'" ref="htmlFormatRoot" class="unity-rendered unity-html" v-html="html" />
-		<span v-else class="unity-rendered unity-plaintext">{{ plainText }}</span>
-
-		<FilePreview v-if="preview"
-			:src="preview.src"
-			:name="preview.name"
-			kind="image"
-			@close="preview = null" />
+	<!-- eslint-disable-next-line vue/no-v-html -->
+	<div v-if="rendered" ref="htmlRoot" class="unity-rendered unity-html" :class="{ 'unity-tasks-editable': editable }" v-html="renderedSafe" @click="onRenderedTodo" />
+	<div v-else-if="format === 'markdown'" ref="mdRoot" class="unity-rendered">
+		<NcRichText :text="markdownText"
+			:use-markdown="true"
+			:use-extended-markdown="true"
+			:interactive="editable"
+			@interact-todo="onInteractTodo" />
 	</div>
+	<!-- eslint-disable-next-line vue/no-v-html -->
+	<div v-else-if="format === 'textile'" ref="textileRoot" class="unity-rendered unity-textile" v-html="textileHtml" />
+	<!-- eslint-disable-next-line vue/no-v-html -->
+	<div v-else-if="format === 'html'" ref="htmlFormatRoot" class="unity-rendered unity-html" v-html="html" />
+	<span v-else class="unity-rendered unity-plaintext">{{ plainText }}</span>
 </template>
 
 <script>
 import NcRichText from '@nextcloud/vue/components/NcRichText'
-import FilePreview from './FilePreview.vue'
 import { proxifyImages, imageAttributes } from '../markdown.js'
-import { originalSrc, filenameFromUrl } from '../fileurl.js'
+import { originalSrc } from '../fileurl.js'
 import { renderTextile, renderHtml } from '../render.js'
 import { toggleTaskAt } from '../tasklist.js'
 import { highlightCodeBlocks } from '../highlight.js'
@@ -39,7 +27,7 @@ import { stylizeMentions } from '../mentions.js'
 
 export default {
 	name: 'RenderedText',
-	components: { NcRichText, FilePreview },
+	components: { NcRichText },
 	props: {
 		text: { type: String, default: '' },
 		format: { type: String, default: 'plaintext' },
@@ -51,12 +39,6 @@ export default {
 		rendered: { type: String, default: '' },
 	},
 	emits: ['update:text'],
-	data() {
-		return {
-			// The inline image currently open in the preview modal, or null.
-			preview: null,
-		}
-	},
 	computed: {
 		renderedSafe() {
 			return this.rendered ? renderHtml(this.rendered, this.issueRef) : ''
@@ -124,29 +106,6 @@ export default {
 		}
 	},
 	methods: {
-		// Open inline images in the preview modal. Delegated from the wrapper so it
-		// covers all four render branches — including the NcRichText/markdown one,
-		// which renders asynchronously and re-renders whenever the text changes.
-		onRootClick(e) {
-			const img = e.target.closest && e.target.closest('img:not(.emoji):not(.emoticon)')
-			if (!img) {
-				return
-			}
-			const src = img.getAttribute('src') || ''
-			if (!src) {
-				return // nothing to show; leave the click alone
-			}
-			// GitLab's ImageLinkFilter wraps inline images in an <a> to the upload URL,
-			// and sanitizeHtml() gives every anchor target="_blank" — without this the
-			// browser opens a new tab instead of the modal.
-			e.preventDefault()
-			// A rendered <img> src is ALREADY a proxy URL (proxifyImages / the sanitizeHtml
-			// hook), so it is passed through unresolved. The name doubles as the download
-			// filename, so prefer the upstream filename over alt — GitLab emits a generic
-			// alt ("image") that would save a file with no extension.
-			const name = filenameFromUrl(originalSrc(src)) || img.getAttribute('alt') || 'image'
-			this.preview = { src, name }
-		},
 		// Apply GitLab-style image width/height (stripped from the markdown source)
 		// as attributes on the rendered <img>; combined with the max-width:100% /
 		// height:auto CSS the browser scales them responsively.
@@ -212,7 +171,7 @@ export default {
 			}
 			const target = e.target
 			if (target.tagName === 'IMG') {
-				return // an image click opens the preview (onRootClick), never toggles
+				return // an image click opens the gallery (IssueDetail), never toggles
 			}
 			if (target.closest && target.closest('a')) {
 				return // don't toggle when clicking a link inside the item
@@ -264,12 +223,6 @@ export default {
 .unity-rendered :deep(img) {
 	max-width: 100%;
 	height: auto;
-}
-/* Inline images open in the preview modal (onRootClick). Emoji and Jira Server
-   emoticons are decoration, not content — excluded here and in the handler so the
-   affordance and the behaviour stay in sync. */
-.unity-rendered :deep(img:not(.emoji):not(.emoticon)) {
-	cursor: zoom-in;
 }
 .unity-rendered :deep(pre) {
 	overflow-x: auto;

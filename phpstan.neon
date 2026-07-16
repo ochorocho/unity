@@ -7,3 +7,10 @@ parameters:
 	scanDirectories:
 		- vendor/nextcloud/ocp/OCP
 		- vendor/nextcloud/ocp/NCU
+	ignoreErrors:
+		# LoadViewer lives in the Viewer app, which is not a dependency of this app, so
+		# phpstan can't see that it extends OCP\EventDispatcher\Event. The dispatch is
+		# guarded by class_exists() and the class does extend Event at runtime.
+		-
+			message: '#dispatchTyped\(\) expects OCP\\EventDispatcher\\Event, OCA\\Viewer\\Event\\LoadViewer given#'
+			path: lib/Controller/PageController.php

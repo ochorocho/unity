@@ -20,7 +20,7 @@
 					class="unity-attachment-thumb"
 					:class="{ 'unity-attachment-thumb--icon': !isImage(a) }"
 					:aria-label="t('unity', 'Preview {name}', { name: a.filename })"
-					@click.prevent="preview = a">
+					@click.prevent="openPreview(a)">
 					<img v-if="isImage(a)" :src="thumbUrl(a)" :alt="a.filename">
 					<FilePdfBox v-else-if="isPdf(a)" :size="26" />
 					<FileIcon v-else :size="26" />
@@ -32,7 +32,7 @@
 					<a v-if="previewable(a)"
 						href="#"
 						class="unity-attachment-name"
-						@click.prevent="preview = a">{{ a.filename }}</a>
+						@click.prevent="openPreview(a)">{{ a.filename }}</a>
 					<a v-else
 						:href="proxy(a.src)"
 						:download="a.filename"
@@ -63,12 +63,6 @@
 			</li>
 		</ul>
 		<p v-else class="unity-attachments-empty">{{ t('unity', 'No attachments.') }}</p>
-
-		<FilePreview v-if="preview"
-			:src="proxy(preview.src)"
-			:name="preview.filename"
-			:kind="previewKind(preview)"
-			@close="preview = null" />
 	</div>
 </template>
 
@@ -76,9 +70,9 @@
 import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
 import { showConfirmation, showError, showSuccess } from '@nextcloud/dialogs'
+import { viewerOpen } from '../viewer.js'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
-import FilePreview from './FilePreview.vue'
 import Paperclip from 'vue-material-design-icons/Paperclip.vue'
 import Download from 'vue-material-design-icons/Download.vue'
 import Delete from 'vue-material-design-icons/Delete.vue'
@@ -87,7 +81,7 @@ import FilePdfBox from 'vue-material-design-icons/FilePdfBox.vue'
 
 export default {
 	name: 'IssueAttachments',
-	components: { NcButton, NcLoadingIcon, FilePreview, Paperclip, Download, Delete, FileIcon, FilePdfBox },
+	components: { NcButton, NcLoadingIcon, Paperclip, Download, Delete, FileIcon, FilePdfBox },
 	props: {
 		issueRef: { type: String, required: true },
 		reloadKey: { type: Number, default: 0 },
@@ -99,13 +93,10 @@ export default {
 			loading: false,
 			uploading: false,
 			deletingId: null,
-			// The attachment currently open in the preview modal, or null.
-			preview: null,
 		}
 	},
 	watch: {
 		issueRef() {
-			this.preview = null
 			this.fetch()
 		},
 		reloadKey() {
@@ -138,23 +129,18 @@ export default {
 		isText(a) {
 			return this.mimeType(a).startsWith('text/')
 		},
-		// Types the browser can render inline in the preview modal.
+		// Types the Nextcloud Viewer can display.
 		previewable(a) {
 			return this.isImage(a) || this.isVideo(a) || this.isAudio(a) || this.isPdf(a) || this.isText(a)
 		},
-		// Which element the preview modal renders. Only previewable() types get here,
-		// so the fallback is always PDF/text — an iframe with the browser's own viewer.
-		previewKind(a) {
-			if (this.isImage(a)) {
-				return 'image'
-			}
-			if (this.isVideo(a)) {
-				return 'video'
-			}
-			if (this.isAudio(a)) {
-				return 'audio'
-			}
-			return 'document'
+		// Open all previewable attachments as a Viewer gallery, starting at the clicked one.
+		// a.src is a RAW upstream URL, so it must be proxied; a.mimeType is a real mime.
+		openPreview(a) {
+			const items = this.attachments.filter((x) => this.previewable(x))
+			viewerOpen(
+				items.map((x) => ({ src: this.proxy(x.src), name: x.filename, mime: this.mimeType(x) })),
+				items.indexOf(a),
+			)
 		},
 		thumbUrl(a) {
 			return this.proxy(a.thumbnailSrc || a.src)
