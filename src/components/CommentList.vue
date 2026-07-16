@@ -204,7 +204,7 @@ export default {
 /* Comment images open the gallery (IssueDetail.onDetailClick, delegated from the detail
    root). The affordance lives here because this is one of the two containers that
    handler acts on. Emoji/emoticons are decoration — excluded there too. */
-.unity-comment-body :deep(img:not(.emoji):not(.emoticon)) {
+.unity-comment-body :deep(img:not(.emoji):not(.emoticon):not(.unity-inline-fileicon)) {
 	cursor: zoom-in;
 }
 .unity-comment-edit-actions {

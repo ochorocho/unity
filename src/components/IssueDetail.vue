@@ -127,10 +127,14 @@ import { humanizeDuration } from '../duration.js'
 import { originalSrc, filenameFromUrl } from '../fileurl.js'
 import { viewerOpen, mimeFromName } from '../viewer.js'
 
-// Every image in the issue body — description first, then comments (querySelectorAll
-// returns document order). Scoped to those two containers so the attachment thumbnails
-// and the editor's preview tab, both also inside .unity-detail, are not swept in.
-const GALLERY_IMAGES = '.unity-description img:not(.emoji):not(.emoticon), .unity-comment-body img:not(.emoji):not(.emoticon)'
+// Everything in the issue body that opens the Viewer gallery — inline images plus the
+// media chips RenderedText marks with data-unity-media (uploaded audio/video). In
+// document order (querySelectorAll), across the description and comments only, so
+// attachment thumbnails and the editor's preview tab (also inside .unity-detail) and
+// the decoration icons (.unity-inline-fileicon, emoji/emoticons) are not swept in.
+// Plain uploaded-file links have no data-unity-media, so they stay out and download.
+const GALLERY_ITEM = 'img:not(.emoji):not(.emoticon):not(.unity-inline-fileicon), a[data-unity-media]'
+const GALLERY_ITEMS = `.unity-description :is(${GALLERY_ITEM}), .unity-comment-body :is(${GALLERY_ITEM})`
 
 export default {
 	name: 'IssueDetail',
@@ -201,29 +205,36 @@ export default {
 			this.editRecord = record
 			this.showLogModal = true
 		},
-		// Open any body image in the preview, as a gallery over every image in the issue.
-		// Delegated from the root so it covers the description and all comments — including
-		// ones added or re-rendered later — with a single listener.
+		// Open any body image or media chip in the Viewer, as a gallery over all of them in
+		// the issue. Delegated from the root so it covers the description and all comments —
+		// including ones added or re-rendered later — with a single listener. Plain file
+		// links aren't matched, so they fall through to their own download behaviour.
 		onDetailClick(e) {
-			const img = e.target.closest && e.target.closest('img:not(.emoji):not(.emoticon)')
-			if (!img || !img.closest('.unity-description, .unity-comment-body')) {
+			const el = e.target.closest && e.target.closest('img:not(.emoji):not(.emoticon):not(.unity-inline-fileicon), a[data-unity-media]')
+			if (!el || !el.closest('.unity-description, .unity-comment-body')) {
 				return
 			}
-			const els = [...this.$el.querySelectorAll(GALLERY_IMAGES)].filter((el) => el.getAttribute('src'))
-			const index = els.indexOf(img)
+			const els = [...this.$el.querySelectorAll(GALLERY_ITEMS)]
+				.filter((x) => (x.tagName === 'A' ? x.getAttribute('href') : x.getAttribute('src')))
+			const index = els.indexOf(el)
 			if (index === -1) {
 				return
 			}
 			// GitLab wraps inline images in an <a> to the upload URL and sanitizeHtml() gives
 			// every anchor target="_blank": without this the browser opens a new tab.
 			e.preventDefault()
-			viewerOpen(els.map((el) => this.imageItem(el)), index)
+			viewerOpen(els.map((x) => this.galleryItem(x)), index)
 		},
-		// A rendered <img> src is ALREADY a proxy URL, so it is passed through unresolved. The
-		// name doubles as the download filename, so prefer the upstream filename over alt —
-		// GitLab emits a generic alt ("image") that would save a file with no extension. Inline
-		// images carry no mime, so it is derived from the name.
-		imageItem(el) {
+		// Build a Viewer item from a gallery element. The src is ALREADY a proxy URL (image
+		// <img src> or media chip <a href>), passed through unresolved. The name doubles as
+		// the download filename, so prefer the upstream filename. Media chips carry their
+		// mime in data-unity-media; images have none, so it's derived from the name.
+		galleryItem(el) {
+			if (el.tagName === 'A') {
+				const src = el.getAttribute('href')
+				const name = filenameFromUrl(originalSrc(src)) || el.textContent.trim() || 'file'
+				return { src, name, mime: el.dataset.unityMedia }
+			}
 			const src = el.getAttribute('src')
 			const name = filenameFromUrl(originalSrc(src)) || el.getAttribute('alt') || 'image'
 			return { src, name, mime: mimeFromName(name) }
@@ -396,9 +407,10 @@ export default {
 	overflow-wrap: anywhere;
 }
 /* Body images open the gallery (onDetailClick). Scoped to the containers that handler
-   actually acts on, so nothing else advertises a zoom it won't perform. Emoji and Jira
-   Server emoticons are decoration, not content — excluded here and in the handler. */
-.unity-description :deep(img:not(.emoji):not(.emoticon)) {
+   actually acts on, so nothing else advertises a zoom it won't perform. Emoji, Jira
+   Server emoticons and the mime-type file-link icons are decoration, not gallery
+   content — excluded here and in the handler. */
+.unity-description :deep(img:not(.emoji):not(.emoticon):not(.unity-inline-fileicon)) {
 	cursor: zoom-in;
 }
 .unity-time {

@@ -18,6 +18,10 @@ use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\DataDisplayResponse;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\Files\File;
+use OCP\Files\IRootFolder;
+use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\IRequest;
 
 class IssueController extends Controller {
@@ -27,6 +31,7 @@ class IssueController extends Controller {
 		IRequest $request,
 		private IssueService $issueService,
 		private IssueNotifier $notifier,
+		private IRootFolder $rootFolder,
 		private ?string $userId,
 	) {
 		parent::__construct($appName, $request);
@@ -156,6 +161,42 @@ class IssueController extends Controller {
 	}
 
 	/**
+	 * Attach an existing Nextcloud file (chosen via the file picker) to the issue by
+	 * path — the bytes are read server-side, so nothing round-trips through the browser.
+	 * The path is resolved inside the user's own files root, which scopes it to their
+	 * files and rejects traversal outside it.
+	 */
+	#[NoAdminRequired]
+	public function attachFile(string $ref, string $path): DataResponse {
+		if (trim($path) === '') {
+			return new DataResponse(['error' => 'No path given'], Http::STATUS_BAD_REQUEST);
+		}
+		try {
+			$node = $this->rootFolder->getUserFolder($this->userId ?? '')->get($path);
+		} catch (NotFoundException $e) {
+			return new DataResponse(['error' => 'File not found'], Http::STATUS_NOT_FOUND);
+		}
+		if (!$node instanceof File) {
+			return new DataResponse(['error' => 'Not a file'], Http::STATUS_BAD_REQUEST);
+		}
+		try {
+			$content = $node->getContent();
+			$attachment = $this->issueService->uploadAttachment(
+				$this->userId ?? '',
+				$ref,
+				$node->getName(),
+				$node->getMimeType() ?: 'application/octet-stream',
+				$content,
+			);
+			return new DataResponse($attachment, Http::STATUS_CREATED);
+		} catch (NotPermittedException $e) {
+			return new DataResponse(['error' => 'Could not read file'], Http::STATUS_BAD_REQUEST);
+		} catch (TrackerException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+	}
+
+	/**
 	 * Upload a file to the tracker for inline embedding in a body (e.g. GitLab's
 	 * /uploads endpoint) and return the markdown snippet the editor inserts.
 	 */
@@ -232,16 +273,77 @@ class IssueController extends Controller {
 	public function file(string $ref, string $src): DataDisplayResponse {
 		try {
 			$file = $this->issueService->fetchFile($this->userId ?? '', $ref, $src);
-			$response = new DataDisplayResponse(
-				$file['body'],
-				Http::STATUS_OK,
-				['Content-Type' => $file['contentType']],
-			);
-			$response->cacheFor(3600, false, true);
-			return $response;
 		} catch (TrackerException $e) {
 			return new DataDisplayResponse('', Http::STATUS_NOT_FOUND);
 		}
+		$body = $file['body'];
+		$contentType = $file['contentType'];
+		$length = strlen($body);
+
+		// Honour a single byte range so <audio>/<video> can play and seek: media
+		// elements request ranges and Safari refuses to play a resource served without
+		// range support. The whole file is already in memory, so we just slice it.
+		$range = $this->parseRange($this->request->getHeader('Range'), $length);
+		if ($range === false) {
+			// A range was asked for but is unsatisfiable.
+			return new DataDisplayResponse('', Http::STATUS_REQUEST_RANGE_NOT_SATISFIABLE, [
+				'Content-Range' => 'bytes */' . $length,
+				'Accept-Ranges' => 'bytes',
+			]);
+		}
+		if ($range !== null) {
+			[$start, $end] = $range;
+			$response = new DataDisplayResponse(
+				substr($body, $start, $end - $start + 1),
+				Http::STATUS_PARTIAL_CONTENT,
+				[
+					'Content-Type' => $contentType,
+					'Content-Range' => 'bytes ' . $start . '-' . $end . '/' . $length,
+					'Accept-Ranges' => 'bytes',
+				],
+			);
+			$response->cacheFor(3600, false, true);
+			return $response;
+		}
+
+		$response = new DataDisplayResponse(
+			$body,
+			Http::STATUS_OK,
+			['Content-Type' => $contentType, 'Accept-Ranges' => 'bytes'],
+		);
+		$response->cacheFor(3600, false, true);
+		return $response;
+	}
+
+	/**
+	 * Parse a single-range HTTP `Range` header against a body of $length bytes.
+	 * Returns [start, end] (inclusive) for a satisfiable range, null when no range
+	 * was requested (serve the whole body), or false when the range is unsatisfiable
+	 * (respond 416). Only a single range is supported — media elements never send
+	 * multi-ranges — so anything else falls through to the full body.
+	 *
+	 * @return array{0: int, 1: int}|null|false
+	 */
+	private function parseRange(string $header, int $length): array|null|false {
+		if ($header === '' || preg_match('/^bytes=(\d*)-(\d*)$/', trim($header), $m) !== 1) {
+			return null;
+		}
+		[$first, $last] = [$m[1], $m[2]];
+		if ($first === '' && $last === '') {
+			return null;
+		}
+		if ($first === '') {
+			// Suffix range: the last N bytes.
+			$start = max(0, $length - (int)$last);
+			$end = $length - 1;
+		} else {
+			$start = (int)$first;
+			$end = $last === '' ? $length - 1 : min((int)$last, $length - 1);
+		}
+		if ($length === 0 || $start > $end || $start >= $length) {
+			return false;
+		}
+		return [$start, $end];
 	}
 
 	#[NoAdminRequired]

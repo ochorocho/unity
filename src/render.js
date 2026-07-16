@@ -27,28 +27,42 @@ import { generateUrl } from '@nextcloud/router'
 export function sanitizeHtml(html, ref) {
 	const base = generateUrl('/apps/unity/issues/{ref}/file', { ref: encodeURIComponent(ref) })
 
+	const proxify = (url) => `${base}?src=${encodeURIComponent(url)}`
+	// A resource the browser would load cross-origin (so blocked by our img-src/media-src
+	// 'self' CSP): needs proxying. Skips inline data: URIs and already-proxied URLs.
+	const external = (url) => url && !/^data:/i.test(url) && !url.startsWith(base)
+
 	const hook = (node) => {
-		if (node.tagName === 'IMG') {
-			// GitLab's ImageLazyLoadFilter parks the real URL in data-src and leaves a
-			// 1x1 transparent GIF in src; its lazy-loader is GitLab's own frontend JS,
-			// which never runs here, so the placeholder would be all that ever renders.
-			// Promote data-src and drop it, so what remains is a plain, already-loaded
-			// <img> pointing at the proxy.
-			const lazySrc = node.getAttribute('data-src') || ''
-			const src = lazySrc || node.getAttribute('src') || ''
-			if (src && !/^data:/i.test(src) && !src.startsWith(base)) {
-				node.setAttribute('src', `${base}?src=${encodeURIComponent(src)}`)
+		const tag = node.tagName
+		// Every resource the browser fetches inline must go through the same-origin proxy
+		// (so private files load with the connection's token and satisfy the CSP): images,
+		// and the media GitLab's Audio/VideoLinkFilter emit as <audio>/<video>/<source>.
+		if (tag === 'IMG' || tag === 'AUDIO' || tag === 'VIDEO' || tag === 'SOURCE') {
+			// GitLab's ImageLazyLoadFilter parks the real URL in data-src and leaves a 1x1
+			// GIF in src; its lazy-loader is GitLab's own JS, which never runs here, so the
+			// placeholder would be all that renders. Promote data-src and drop it. (Media
+			// elements carry a plain src; the fallback covers them.)
+			const src = node.getAttribute('data-src') || node.getAttribute('src') || ''
+			if (external(src)) {
+				node.setAttribute('src', proxify(src))
 				node.removeAttribute('data-src')
 			}
+			// <video poster> is a still image loaded under the CSP too.
+			if (tag === 'VIDEO') {
+				const poster = node.getAttribute('poster') || ''
+				if (external(poster)) {
+					node.setAttribute('poster', proxify(poster))
+				}
+			}
 		}
-		if (node.tagName === 'A') {
+		if (tag === 'A') {
 			const href = node.getAttribute('href') || ''
 			// GitLab wraps each inline image in a link to its upstream upload URL, and
 			// links uploaded files the same way; both need the token-authenticated proxy
 			// that <img src> already goes through, or they open a login page. Matched by
 			// upload shape so ordinary links (and other trackers) are never touched.
 			if (/\/uploads\/[0-9a-f]+\/[^/]+$/i.test(href) && !href.startsWith(base)) {
-				node.setAttribute('href', `${base}?src=${encodeURIComponent(href)}`)
+				node.setAttribute('href', proxify(href))
 			}
 			node.setAttribute('target', '_blank')
 			node.setAttribute('rel', 'noopener noreferrer')

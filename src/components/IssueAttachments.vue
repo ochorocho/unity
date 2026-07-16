@@ -2,14 +2,23 @@
 	<div class="unity-attachments">
 		<div class="unity-attachments-header">
 			<span class="unity-attachments-title">{{ t('unity', 'Attachments') }}</span>
-			<NcButton type="secondary" :disabled="uploading" @click="pick">
-				<template #icon>
-					<NcLoadingIcon v-if="uploading" :size="18" />
-					<Paperclip v-else :size="18" />
-				</template>
-				{{ t('unity', 'Add attachment') }}
-			</NcButton>
-			<input ref="fileInput" type="file" class="unity-attachments-input" @change="onFile">
+			<div class="unity-attachments-actions">
+				<NcButton type="secondary" :disabled="uploading || picking" @click="pickFromFiles">
+					<template #icon>
+						<NcLoadingIcon v-if="picking" :size="18" />
+						<FolderMultiple v-else :size="18" />
+					</template>
+					{{ t('unity', 'Choose from Files') }}
+				</NcButton>
+				<NcButton type="secondary" :disabled="uploading || picking" @click="pick">
+					<template #icon>
+						<NcLoadingIcon v-if="uploading" :size="18" />
+						<Paperclip v-else :size="18" />
+					</template>
+					{{ t('unity', 'Add attachment') }}
+				</NcButton>
+				<input ref="fileInput" type="file" class="unity-attachments-input" @change="onFile">
+			</div>
 		</div>
 
 		<NcLoadingIcon v-if="loading" :size="20" />
@@ -22,11 +31,12 @@
 					:aria-label="t('unity', 'Preview {name}', { name: a.filename })"
 					@click.prevent="openPreview(a)">
 					<img v-if="isImage(a)" :src="thumbUrl(a)" :alt="a.filename">
-					<FilePdfBox v-else-if="isPdf(a)" :size="26" />
+					<img v-else-if="mimeIconUrl(a)" class="unity-attachment-mimeicon" :src="mimeIconUrl(a)" :alt="mimeType(a)">
 					<FileIcon v-else :size="26" />
 				</a>
 				<span v-else class="unity-attachment-thumb unity-attachment-thumb--icon">
-					<FileIcon :size="26" />
+					<img v-if="mimeIconUrl(a)" class="unity-attachment-mimeicon" :src="mimeIconUrl(a)" :alt="mimeType(a)">
+					<FileIcon v-else :size="26" />
 				</span>
 				<div class="unity-attachment-main">
 					<a v-if="previewable(a)"
@@ -69,19 +79,20 @@
 <script>
 import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
-import { showConfirmation, showError, showSuccess } from '@nextcloud/dialogs'
+import { getFilePickerBuilder, FilePickerType, showConfirmation, showError, showSuccess } from '@nextcloud/dialogs'
 import { viewerOpen } from '../viewer.js'
+import { fileIconUrl } from '../mime.js'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import Paperclip from 'vue-material-design-icons/Paperclip.vue'
+import FolderMultiple from 'vue-material-design-icons/FolderMultiple.vue'
 import Download from 'vue-material-design-icons/Download.vue'
 import Delete from 'vue-material-design-icons/Delete.vue'
 import FileIcon from 'vue-material-design-icons/File.vue'
-import FilePdfBox from 'vue-material-design-icons/FilePdfBox.vue'
 
 export default {
 	name: 'IssueAttachments',
-	components: { NcButton, NcLoadingIcon, Paperclip, Download, Delete, FileIcon, FilePdfBox },
+	components: { NcButton, NcLoadingIcon, Paperclip, FolderMultiple, Download, Delete, FileIcon },
 	props: {
 		issueRef: { type: String, required: true },
 		reloadKey: { type: Number, default: 0 },
@@ -92,6 +103,7 @@ export default {
 			attachments: [],
 			loading: false,
 			uploading: false,
+			picking: false,
 			deletingId: null,
 		}
 	},
@@ -126,12 +138,17 @@ export default {
 		isPdf(a) {
 			return this.mimeType(a) === 'application/pdf'
 		},
-		isText(a) {
-			return this.mimeType(a).startsWith('text/')
+		// Nextcloud's Files-app icon URL for an attachment's (authoritative) mime type,
+		// or '' when OC.MimeType isn't on the page (the template falls back to a generic
+		// file icon). Shared with the inline file-link decoration in RenderedText.
+		mimeIconUrl(a) {
+			return fileIconUrl(this.mimeType(a))
 		},
-		// Types the Nextcloud Viewer can display.
+		// Media the browser renders directly (native image/video/audio elements, and
+		// PDF). Everything else — text, office docs, archives — falls back to a plain
+		// download link rather than the preview modal.
 		previewable(a) {
-			return this.isImage(a) || this.isVideo(a) || this.isAudio(a) || this.isPdf(a) || this.isText(a)
+			return this.isImage(a) || this.isVideo(a) || this.isAudio(a) || this.isPdf(a)
 		},
 		// Open all previewable attachments as a Viewer gallery, starting at the clicked one.
 		// a.src is a RAW upstream URL, so it must be proxied; a.mimeType is a real mime.
@@ -183,6 +200,51 @@ export default {
 			const files = e.target.files ? Array.from(e.target.files) : []
 			e.target.value = '' // allow re-selecting the same file later
 			await this.uploadFiles(files)
+		},
+		/**
+		 * Open the Nextcloud file picker and attach the chosen existing file(s) by
+		 * path: the backend reads the bytes server-side, so nothing round-trips through
+		 * the browser. Cancelling the picker rejects the promise; that is swallowed.
+		 */
+		async pickFromFiles() {
+			const picker = getFilePickerBuilder(this.t('unity', 'Choose a file'))
+				.setMultiSelect(true)
+				.setType(FilePickerType.Choose)
+				.allowDirectories(false)
+				.build()
+			let picked
+			try {
+				picked = await picker.pick()
+			} catch (e) {
+				return // picker closed/cancelled — no toast
+			}
+			const paths = (Array.isArray(picked) ? picked : [picked]).filter(Boolean)
+			if (paths.length === 0) {
+				return
+			}
+			this.picking = true
+			let ok = 0
+			try {
+				const ref = encodeURIComponent(this.issueRef)
+				for (const path of paths) {
+					try {
+						await axios.post(generateUrl('/apps/unity/issues/{ref}/attach-file', { ref }), { path })
+						ok++
+					} catch (err) {
+						showError(err?.response?.data?.error
+							|| this.t('unity', 'Could not attach {name}', { name: path.split('/').pop() || path }))
+					}
+				}
+				if (ok > 0) {
+					showSuccess(ok === 1
+						? this.t('unity', 'Attachment uploaded')
+						: this.t('unity', '{count} attachments uploaded', { count: ok }))
+					await this.fetch()
+					this.$emit('changed')
+				}
+			} finally {
+				this.picking = false
+			}
 		},
 		/**
 		 * Upload one or more files to the issue, one request each. Shared by the
@@ -266,6 +328,12 @@ export default {
 .unity-attachments-title {
 	font-weight: bold;
 }
+.unity-attachments-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
 .unity-attachments-input {
 	display: none;
 }
@@ -298,6 +366,13 @@ export default {
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
+}
+/* A mime-type icon (not a photo thumbnail) sits contained, not cover-cropped. Scoped
+   under the thumb so it out-specifies the `.unity-attachment-thumb img` rule above. */
+.unity-attachment-thumb .unity-attachment-mimeicon {
+	width: 28px;
+	height: 28px;
+	object-fit: contain;
 }
 .unity-attachment-main {
 	display: flex;

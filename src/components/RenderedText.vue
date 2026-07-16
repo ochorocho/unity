@@ -18,7 +18,8 @@
 <script>
 import NcRichText from '@nextcloud/vue/components/NcRichText'
 import { proxifyImages, imageAttributes } from '../markdown.js'
-import { originalSrc } from '../fileurl.js'
+import { originalSrc, filenameFromUrl } from '../fileurl.js'
+import { mimeFromExtension, fileIconUrl } from '../mime.js'
 import { renderTextile, renderHtml } from '../render.js'
 import { toggleTaskAt } from '../tasklist.js'
 import { highlightCodeBlocks } from '../highlight.js'
@@ -64,18 +65,24 @@ export default {
 				this.enableRenderedTasks()
 				this.highlightRendered()
 				this.applyMentionPills()
+				this.transformMediaLinks()
+				this.decorateFileLinks()
 			})
 		},
 		textileHtml() {
 			this.$nextTick(() => {
 				this.highlightRendered()
 				this.applyMentionPills()
+				this.transformMediaLinks()
+				this.decorateFileLinks()
 			})
 		},
 		html() {
 			this.$nextTick(() => {
 				this.highlightRendered()
 				this.applyMentionPills()
+				this.transformMediaLinks()
+				this.decorateFileLinks()
 			})
 		},
 	},
@@ -97,6 +104,8 @@ export default {
 			// The NcRichText (markdown) branch highlights itself; the v-html branches don't.
 			this.highlightRendered()
 			this.applyMentionPills()
+			this.transformMediaLinks()
+			this.decorateFileLinks()
 		})
 	},
 	beforeUnmount() {
@@ -143,6 +152,78 @@ export default {
 			stylizeMentions(this.$refs.htmlFormatRoot, { heuristic: false })
 			stylizeMentions(this.$refs.textileRoot, { heuristic: true })
 			stylizeMentions(this.$refs.mdRoot, { heuristic: true })
+		},
+		// Turn GitLab's inline <audio>/<video> players into a file chip: the media element
+		// is removed and its filename link (GitLab renders one alongside; else we build one
+		// from the proxied src) is tagged `data-unity-media` with the mime, so IssueDetail
+		// opens it in the Viewer gallery instead of playing it inline. Must run before
+		// decorateFileLinks so those links are recognised as media, not downloads.
+		transformMediaLinks() {
+			[this.$refs.htmlRoot, this.$refs.htmlFormatRoot, this.$refs.textileRoot].forEach((root) => {
+				if (!root) {
+					return
+				}
+				root.querySelectorAll('audio, video').forEach((media) => {
+					const isUpload = (a) => /\/uploads\/[0-9a-f]+\/[^/]+$/i.test(originalSrc(a.getAttribute('href') || ''))
+					const src = media.getAttribute('src') || media.querySelector('source')?.getAttribute('src') || ''
+					const parent = media.parentElement
+					let link = parent && [...parent.querySelectorAll('a')].find(isUpload)
+					if (!link) {
+						if (!src) {
+							return
+						}
+						link = document.createElement('a')
+						link.setAttribute('href', src)
+						link.textContent = filenameFromUrl(originalSrc(src)) || media.tagName.toLowerCase()
+						media.parentNode.insertBefore(link, media)
+					}
+					const name = filenameFromUrl(originalSrc(link.getAttribute('href') || '')) || link.textContent.trim()
+					link.dataset.unityMedia = mimeFromExtension(name)
+					link.setAttribute('target', '_blank')
+					link.setAttribute('rel', 'noopener noreferrer')
+					media.remove()
+				})
+			})
+		},
+		// Decorate inline uploaded *file* links (GitLab renders a non-media upload as a
+		// text <a> to /uploads/<hex>/<name>; images render as elements, so a link with no
+		// media child is a file). All get a Nextcloud file-type icon (mime guessed from the
+		// extension). Files that don't open the modal also get `download` so a click saves
+		// them with their filename; media chips (data-unity-media) open the Viewer instead
+		// and are left alone. Runs after sanitization, so the icon (a same-origin core
+		// asset) is not re-proxied by the sanitizer's IMG rule.
+		decorateFileLinks() {
+			[this.$refs.htmlRoot, this.$refs.htmlFormatRoot, this.$refs.textileRoot].forEach((root) => {
+				if (!root) {
+					return
+				}
+				root.querySelectorAll('a').forEach((a) => {
+					if (a.querySelector('img, audio, video')) {
+						return
+					}
+					const upstream = originalSrc(a.getAttribute('href') || '')
+					if (!/\/uploads\/[0-9a-f]+\/[^/]+$/i.test(upstream)) {
+						return
+					}
+					const name = filenameFromUrl(upstream)
+					if (!a.dataset.unityMedia && name && !a.hasAttribute('download')) {
+						a.setAttribute('download', name)
+					}
+					if (a.dataset.unityFileicon) {
+						return
+					}
+					const url = fileIconUrl(mimeFromExtension(name))
+					if (!url) {
+						return
+					}
+					const icon = document.createElement('img')
+					icon.src = url
+					icon.className = 'unity-inline-fileicon'
+					icon.alt = ''
+					a.insertBefore(icon, a.firstChild)
+					a.dataset.unityFileicon = '1' // idempotent across re-decorations
+				})
+			})
 		},
 		// Syntax-highlight code blocks in whichever provider-HTML branch is rendered
 		// (the NcRichText/markdown branch highlights itself).
@@ -223,6 +304,15 @@ export default {
 .unity-rendered :deep(img) {
 	max-width: 100%;
 	height: auto;
+}
+/* Mime-type icon prepended to inline uploaded file links (decorateFileLinks). Scoped
+   under .unity-rendered so it out-specifies the generic img rule above. */
+.unity-rendered :deep(.unity-inline-fileicon) {
+	width: 1.1em;
+	height: 1.1em;
+	object-fit: contain;
+	vertical-align: -0.2em;
+	margin-inline-end: 0.3em;
 }
 .unity-rendered :deep(pre) {
 	overflow-x: auto;
