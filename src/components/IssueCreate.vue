@@ -9,76 +9,78 @@
 				</NcNoteCard>
 			</template>
 			<template v-else>
-				<div class="unity-create-field">
-					<label class="unity-create-label">{{ t('unity', 'Connection') }}</label>
-					<select v-model="connectionId" class="unity-create-select" @change="onConnectionChange">
-						<option value="" disabled>{{ t('unity', 'Choose a connection') }}</option>
-						<option v-for="c in creatableConnections" :key="c.id" :value="c.id">
-							{{ c.label || c.baseUrl }}
-						</option>
-					</select>
-				</div>
-
-				<NcLoadingIcon v-if="loadingMeta" :size="24" />
-				<NcNoteCard v-else-if="metaError" type="error">{{ metaError }}</NcNoteCard>
-
-				<template v-if="meta && !loadingMeta">
+				<div class="unity-form-grid">
 					<div class="unity-create-field">
-						<label class="unity-create-label">{{ projectLabel }}</label>
-						<NcSelect v-model="projectSelection"
-							:options="projectOptions"
-							label="name"
-							:clearable="false"
-							:filterable="false"
-							:loading="projectsLoading"
-							:placeholder="t('unity', 'Search projects')"
-							:aria-label-combobox="projectLabel"
-							@search="onProjectSearch" />
-						<p v-if="meta.projects.length === 0" class="unity-create-hint">
-							{{ t('unity', 'No projects available for this connection.') }}
-						</p>
-					</div>
-
-					<div v-if="currentTypes.length" class="unity-create-field">
-						<label class="unity-create-label">{{ t('unity', 'Type') }}</label>
-						<select v-model="typeId" class="unity-create-select">
-							<option value="" :disabled="meta.capabilities.typeRequired">
-								{{ meta.capabilities.typeRequired ? t('unity', 'Choose a type') : t('unity', '(default)') }}
+						<label class="unity-create-label">{{ t('unity', 'Connection') }}</label>
+						<select v-model="connectionId" class="unity-create-select" @change="onConnectionChange">
+							<option value="" disabled>{{ t('unity', 'Choose a connection') }}</option>
+							<option v-for="c in creatableConnections" :key="c.id" :value="c.id">
+								{{ c.label || c.baseUrl }}
 							</option>
-							<option v-for="ty in currentTypes" :key="ty.id" :value="ty.id">{{ ty.name }}</option>
 						</select>
 					</div>
 
-					<div v-if="projectId && assigneeSupported" class="unity-create-field">
-						<label class="unity-create-label">{{ t('unity', 'Assignee') }}</label>
-						<AssigneePicker mode="create"
-							:connection-id="connectionId"
-							:project="projectId"
-							@change="assigneeChoice = $event" />
-					</div>
+					<NcLoadingIcon v-if="loadingMeta" class="unity-form-grid__full" :size="24" />
+					<NcNoteCard v-else-if="metaError" class="unity-form-grid__full" type="error">{{ metaError }}</NcNoteCard>
 
-					<div class="unity-create-field">
-						<label class="unity-create-label">{{ t('unity', 'Title') }}</label>
-						<NcTextField v-model="title" :label="t('unity', 'Title')" />
-					</div>
+					<template v-if="meta && !loadingMeta">
+						<div class="unity-create-field unity-create-field--full">
+							<label class="unity-create-label">{{ projectLabel }}</label>
+							<NcSelect v-model="projectSelection"
+								:options="projectOptions"
+								label="name"
+								:clearable="false"
+								:filterable="false"
+								:loading="projectsLoading"
+								:placeholder="t('unity', 'Search projects')"
+								:aria-label-combobox="projectLabel"
+								@search="onProjectSearch" />
+							<p v-if="meta.projects.length === 0" class="unity-create-hint">
+								{{ t('unity', 'No projects available for this connection.') }}
+							</p>
+						</div>
 
-					<div class="unity-create-field">
-						<label class="unity-create-label">{{ t('unity', 'Description') }}</label>
-						<MarkupEditor v-model="description"
-							:format="bodyFormat"
-							:tracker="selectedTracker"
-							:connection="connectionId"
-							:project="projectId"
-							:rows="6" />
-					</div>
+						<div v-if="currentTypes.length" class="unity-create-field">
+							<label class="unity-create-label">{{ t('unity', 'Type') }}</label>
+							<select v-model="typeId" class="unity-create-select">
+								<option value="" :disabled="meta.capabilities.typeRequired">
+									{{ meta.capabilities.typeRequired ? t('unity', 'Choose a type') : t('unity', '(default)') }}
+								</option>
+								<option v-for="ty in currentTypes" :key="ty.id" :value="ty.id">{{ ty.name }}</option>
+							</select>
+						</div>
 
-					<NcLoadingIcon v-if="fieldsLoading" :size="20" />
-					<DynamicField v-for="f in fields"
-						:key="f.id"
-						:descriptor="f"
-						:model-value="fieldValues[f.id]"
-						@update:model-value="setFieldValue(f.id, $event)" />
-				</template>
+						<div v-if="projectId && assigneeSupported" class="unity-create-field">
+							<label class="unity-create-label">{{ t('unity', 'Assignee') }}</label>
+							<AssigneePicker mode="create"
+								:connection-id="connectionId"
+								:project="projectId"
+								@change="assigneeChoice = $event" />
+						</div>
+
+						<div class="unity-create-field unity-create-field--full">
+							<label class="unity-create-label">{{ t('unity', 'Title') }}</label>
+							<NcTextField v-model="title" label-outside :aria-label="t('unity', 'Title')" />
+						</div>
+
+						<div class="unity-create-field unity-create-field--full">
+							<label class="unity-create-label">{{ t('unity', 'Description') }}</label>
+							<MarkupEditor v-model="description"
+								:format="bodyFormat"
+								:tracker="selectedTracker"
+								:connection="connectionId"
+								:project="projectId"
+								:rows="6" />
+						</div>
+
+						<NcLoadingIcon v-if="fieldsLoading" class="unity-form-grid__full" :size="20" />
+						<DynamicField v-for="f in fields"
+							:key="f.id"
+							:descriptor="f"
+							:model-value="fieldValues[f.id]"
+							@update:model-value="setFieldValue(f.id, $event)" />
+					</template>
+				</div>
 			</template>
 
 			<div class="unity-create-actions">
@@ -380,23 +382,53 @@ export default {
 
 <style scoped>
 .unity-create {
+	/* Query container: the grid adapts to the dialog's content width. Stays flex so the
+	   top NoteCard, the field grid and the actions row stack vertically. */
+	container-type: inline-size;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
 	padding: 8px 16px 16px;
 }
+.unity-form-grid {
+	display: grid;
+	grid-template-columns: 1fr; /* narrow: single column */
+	gap: 8px 12px;
+	align-items: start;
+}
+@container (min-width: 520px) {
+	.unity-form-grid {
+		grid-template-columns: 1fr 1fr; /* capped at two per row */
+	}
+}
+.unity-create-field--full,
+.unity-form-grid__full {
+	grid-column: 1 / -1;
+}
 .unity-create-field {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
+	min-width: 0; /* let the cell shrink instead of overflowing the grid track */
 }
 .unity-create-label {
 	font-size: 0.85em;
 	color: var(--color-text-maxcontrast);
 }
+/* Match the Nextcloud input/select components (height + border) so native selects,
+   date inputs and NcTextField/NcSelect all line up. */
 .unity-create-select {
-	min-height: 36px;
+	min-height: var(--default-clickable-area, 44px);
+	padding: 0 12px;
+	border: 2px solid var(--color-border-maxcontrast);
 	border-radius: var(--border-radius-element, 8px);
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+	width: 100%;
+	box-sizing: border-box;
+}
+.unity-create-select:hover:not(:disabled) {
+	border-color: var(--color-main-text);
 }
 .unity-create-hint {
 	font-size: 0.85em;

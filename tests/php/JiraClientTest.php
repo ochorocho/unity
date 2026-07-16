@@ -704,6 +704,7 @@ class JiraClientTest extends TestCase {
 					['fieldId' => 'summary', 'name' => 'Summary', 'required' => true, 'schema' => ['type' => 'string']],
 					['fieldId' => 'priority', 'name' => 'Priority', 'required' => false, 'schema' => ['type' => 'priority'], 'allowedValues' => [['id' => '3', 'name' => 'High'], ['id' => '4', 'name' => 'Low']]],
 					['fieldId' => 'duedate', 'name' => 'Due', 'required' => false, 'schema' => ['type' => 'date']],
+					['fieldId' => 'customfield_rem', 'name' => 'Remind me on', 'required' => false, 'schema' => ['type' => 'datetime']],
 					['fieldId' => 'customfield_1', 'name' => 'Sprints', 'required' => false, 'schema' => ['type' => 'array', 'items' => 'option'], 'allowedValues' => [['id' => '9', 'value' => 'S1']]],
 					['fieldId' => 'customfield_epic', 'name' => 'Epic', 'required' => false, 'schema' => ['type' => 'any']],
 					['fieldId' => 'attachment', 'name' => 'Attach', 'schema' => ['type' => 'array', 'items' => 'attachment']],
@@ -722,6 +723,7 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('select', $byId['priority']['type']);
 		$this->assertSame([['id' => '3', 'name' => 'High'], ['id' => '4', 'name' => 'Low']], $byId['priority']['options']);
 		$this->assertSame('date', $byId['duedate']['type']);
+		$this->assertSame('date', $byId['customfield_rem']['type']); // datetime → date picker
 		$this->assertSame('multiselect', $byId['customfield_1']['type']);
 		$this->assertSame([['id' => '9', 'name' => 'S1']], $byId['customfield_1']['options']);
 	}

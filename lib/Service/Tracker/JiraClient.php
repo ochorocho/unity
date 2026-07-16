@@ -1052,11 +1052,14 @@ class JiraClient extends AbstractTrackerClient {
 			if ($type === 'select' || $type === 'multiselect') {
 				$extra['options'] = $options;
 			}
-			if ((string)($schema['type'] ?? '') === 'datetime') {
-				$extra['help'] = 'YYYY-MM-DD';
-			}
 			if (array_key_exists($id, $current)) {
-				$extra['value'] = $current[$id];
+				$value = $current[$id];
+				// A Jira `datetime` value comes back as a full ISO string; the date input
+				// (type maps to 'date') needs YYYY-MM-DD, so trim the time component.
+				if ($type === 'date' && is_string($value) && strlen($value) > 10) {
+					$value = substr($value, 0, 10);
+				}
+				$extra['value'] = $value;
 			}
 			$fields[] = $this->field($id, (string)($entry['name'] ?? $id), $type, $extra);
 		}
@@ -1082,7 +1085,9 @@ class JiraClient extends AbstractTrackerClient {
 			'string' => 'text',
 			'number' => 'float',
 			'date' => 'date',
-			'datetime' => 'text',
+			// Rendered as a date picker; the time component is dropped on display and the
+			// date-only value is sent back unchanged (as before it was a text field).
+			'datetime' => 'date',
 			default => null,
 		};
 	}

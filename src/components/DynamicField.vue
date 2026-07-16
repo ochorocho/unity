@@ -1,5 +1,5 @@
 <template>
-	<div class="unity-field">
+	<div class="unity-field" :class="{ 'unity-field--full': isFull }">
 		<label v-if="descriptor.type !== 'bool'" class="unity-field-label">
 			{{ descriptor.name }}<span v-if="descriptor.required" class="unity-field-required" aria-hidden="true"> *</span>
 		</label>
@@ -12,7 +12,7 @@
 			label="name"
 			:clearable="!descriptor.required"
 			:model-value="selectedOptions"
-			:input-label="descriptor.name"
+			:aria-label-combobox="descriptor.name"
 			:placeholder="t('unity', 'Select…')"
 			@update:model-value="onSelect" />
 
@@ -34,7 +34,8 @@
 		<NcTextField v-else-if="descriptor.type === 'int' || descriptor.type === 'float'"
 			type="number"
 			:step="descriptor.type === 'float' ? 'any' : '1'"
-			:label="descriptor.name"
+			label-outside
+			:aria-label="descriptor.name"
 			:model-value="modelValue == null ? '' : String(modelValue)"
 			@update:model-value="$emit('update:modelValue', $event)" />
 
@@ -47,7 +48,8 @@
 
 		<!-- Single-line text (default) -->
 		<NcTextField v-else
-			:label="descriptor.name"
+			label-outside
+			:aria-label="descriptor.name"
 			:model-value="modelValue || ''"
 			@update:model-value="$emit('update:modelValue', $event)" />
 
@@ -72,6 +74,10 @@ export default {
 	computed: {
 		isSelect() {
 			return this.descriptor.type === 'select' || this.descriptor.type === 'multiselect'
+		},
+		// Long free text spans both columns of the form grid (the root is a direct grid cell).
+		isFull() {
+			return this.descriptor.type === 'textarea'
 		},
 		// Map the stored id / id-array back to the option object(s) NcSelect binds to.
 		selectedOptions() {
@@ -100,6 +106,10 @@ export default {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
+	min-width: 0; /* let the grid cell shrink instead of overflowing its track */
+}
+.unity-field--full {
+	grid-column: 1 / -1;
 }
 .unity-field-label {
 	font-size: 0.85em;
@@ -108,13 +118,27 @@ export default {
 .unity-field-required {
 	color: var(--color-error);
 }
+/* Match the Nextcloud input/select components (height + border) so the bare date
+   input and textarea line up with NcTextField/NcSelect and the native selects. */
 .unity-field-input,
 .unity-field-textarea {
-	min-height: 36px;
+	min-height: var(--default-clickable-area, 44px);
+	padding: 0 12px;
+	border: 2px solid var(--color-border-maxcontrast);
 	border-radius: var(--border-radius-element, 8px);
-	padding: 6px 8px;
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+	width: 100%;
+	box-sizing: border-box;
+}
+.unity-field-input:hover,
+.unity-field-textarea:hover {
+	border-color: var(--color-main-text);
 }
 .unity-field-textarea {
+	min-height: 80px;
+	padding: 8px 12px;
+	line-height: 1.5;
 	resize: vertical;
 	font-family: inherit;
 }

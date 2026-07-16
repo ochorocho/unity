@@ -1,49 +1,56 @@
 <template>
 	<div class="unity-edit">
-		<label class="unity-edit-label">{{ t('unity', 'Title') }}</label>
-		<NcTextField v-model="form.title" :label="t('unity', 'Title')" />
+		<div class="unity-form-grid">
+			<div class="unity-edit-field unity-edit-field--full">
+				<label class="unity-edit-label">{{ t('unity', 'Title') }}</label>
+				<NcTextField v-model="form.title" label-outside :aria-label="t('unity', 'Title')" />
+			</div>
 
-		<label class="unity-edit-label">{{ t('unity', 'Description') }}</label>
-		<MarkupEditor v-model="form.description" :format="issue.bodyFormat" :issue-ref="issue.ref" :tracker="issue.tracker" :mentions="issue.mentions || []" :rows="8" />
+			<div class="unity-edit-field unity-edit-field--full">
+				<label class="unity-edit-label">{{ t('unity', 'Description') }}</label>
+				<MarkupEditor v-model="form.description" :format="issue.bodyFormat" :issue-ref="issue.ref" :tracker="issue.tracker" :mentions="issue.mentions || []" :rows="8" />
+			</div>
 
-		<template v-if="meta">
-			<div v-if="meta.capabilities.type && types.length" class="unity-edit-field">
-				<label class="unity-edit-label">{{ t('unity', 'Type') }}</label>
-				<select v-model="typeId" class="unity-edit-select" :disabled="fieldsReloading">
-					<option v-for="ty in types" :key="ty.id" :value="ty.id">{{ ty.name }}</option>
-				</select>
-			</div>
-			<div v-if="meta.capabilities.status" class="unity-edit-field">
-				<label class="unity-edit-label">{{ t('unity', 'Status') }}</label>
-				<select v-model="form.status" class="unity-edit-select">
-					<option value="">{{ t('unity', '(no change)') }}</option>
-					<option v-for="s in meta.statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
-				</select>
-			</div>
-			<div v-if="meta.capabilities.assignee" class="unity-edit-field">
-				<label class="unity-edit-label">{{ t('unity', 'Assignee') }}</label>
-				<AssigneePicker mode="edit"
-					:issue-ref="issue.ref"
-					:current="meta.assignee"
-					@change="assigneeChoice = $event" />
-			</div>
-			<div v-if="meta.capabilities.labels" class="unity-edit-field">
-				<NcSelect v-model="form.labels"
-					:options="labelOptions"
-					:multiple="true"
-					:close-on-select="false"
-					:taggable="meta.capabilities.labelsFreeText"
-					:input-label="t('unity', 'Labels')"
-					:placeholder="meta.capabilities.labelsFreeText ? t('unity', 'Search or type to add labels') : t('unity', 'Search labels')" />
-			</div>
-			<NcLoadingIcon v-if="fieldsReloading" :size="20" />
-			<DynamicField v-for="f in fields"
-				:key="f.id"
-				:descriptor="f"
-				:model-value="fieldValues[f.id]"
-				@update:model-value="setFieldValue(f.id, $event)" />
-		</template>
-		<NcLoadingIcon v-else-if="loadingMeta" :size="20" />
+			<template v-if="meta">
+				<div v-if="meta.capabilities.type && types.length" class="unity-edit-field">
+					<label class="unity-edit-label">{{ t('unity', 'Type') }}</label>
+					<select v-model="typeId" class="unity-edit-select" :disabled="fieldsReloading">
+						<option v-for="ty in types" :key="ty.id" :value="ty.id">{{ ty.name }}</option>
+					</select>
+				</div>
+				<div v-if="meta.capabilities.status" class="unity-edit-field">
+					<label class="unity-edit-label">{{ t('unity', 'Status') }}</label>
+					<select v-model="form.status" class="unity-edit-select">
+						<option value="">{{ t('unity', '(no change)') }}</option>
+						<option v-for="s in meta.statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
+					</select>
+				</div>
+				<div v-if="meta.capabilities.assignee" class="unity-edit-field">
+					<label class="unity-edit-label">{{ t('unity', 'Assignee') }}</label>
+					<AssigneePicker mode="edit"
+						:issue-ref="issue.ref"
+						:current="meta.assignee"
+						@change="assigneeChoice = $event" />
+				</div>
+				<div v-if="meta.capabilities.labels" class="unity-edit-field">
+					<label class="unity-edit-label">{{ t('unity', 'Labels') }}</label>
+					<NcSelect v-model="form.labels"
+						:options="labelOptions"
+						:multiple="true"
+						:close-on-select="false"
+						:taggable="meta.capabilities.labelsFreeText"
+						:aria-label-combobox="t('unity', 'Labels')"
+						:placeholder="meta.capabilities.labelsFreeText ? t('unity', 'Search or type to add labels') : t('unity', 'Search labels')" />
+				</div>
+				<NcLoadingIcon v-if="fieldsReloading" class="unity-form-grid__full" :size="20" />
+				<DynamicField v-for="f in fields"
+					:key="f.id"
+					:descriptor="f"
+					:model-value="fieldValues[f.id]"
+					@update:model-value="setFieldValue(f.id, $event)" />
+			</template>
+			<NcLoadingIcon v-else-if="loadingMeta" class="unity-form-grid__full" :size="20" />
+		</div>
 	</div>
 </template>
 
@@ -235,9 +242,24 @@ export default {
 
 <style scoped>
 .unity-edit {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
+	/* Query container so the grid responds to the form's own width — this form lives in
+	   a resizable detail pane, not the viewport, so a viewport @media would be wrong. */
+	container-type: inline-size;
+}
+.unity-form-grid {
+	display: grid;
+	grid-template-columns: 1fr; /* narrow: single column */
+	gap: 8px 12px;
+	align-items: start;
+}
+@container (min-width: 520px) {
+	.unity-form-grid {
+		grid-template-columns: 1fr 1fr; /* capped at two per row */
+	}
+}
+.unity-edit-field--full,
+.unity-form-grid__full {
+	grid-column: 1 / -1;
 }
 .unity-edit-label {
 	font-size: 0.85em;
@@ -247,10 +269,22 @@ export default {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
+	min-width: 0; /* let the cell shrink instead of overflowing the grid track */
 }
+/* Match the height and border of the Nextcloud input/select components so native
+   selects, date inputs and NcTextField/NcSelect all line up. */
 .unity-edit-select {
-	min-height: 36px;
+	min-height: var(--default-clickable-area, 44px);
+	padding: 0 12px;
+	border: 2px solid var(--color-border-maxcontrast);
 	border-radius: var(--border-radius-element, 8px);
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+	width: 100%;
+	box-sizing: border-box;
+}
+.unity-edit-select:hover:not(:disabled) {
+	border-color: var(--color-main-text);
 }
 .unity-edit-multiselect {
 	min-height: 90px;
