@@ -1,0 +1,47 @@
+{
+  "_comment": "Per-provider fixtures for the LIVE read-only tests. 'label' is the exact connection name in Unity (pre-filled from the configured connections). Add 'issueRef' (a string that appears in the issue's list row / title) or 'searchTerm' to enable that provider's test; leave both empty to skip it. Strictly read-only — issues are only viewed, never edited.",
+  "providers": [
+    {
+      "tracker": "jira",
+      "label": "Jira Cloud",
+      "issueRef": "B13INTERN-2531",
+      "searchTerm": "Jochen Test"
+    },
+    {
+      "tracker": "jira",
+      "label": "Jira Server",
+      "issueRef": "",
+      "searchTerm": ""
+    },
+    {
+      "tracker": "gitlab",
+      "label": "gitlab.com",
+      "issueRef": "",
+      "searchTerm": "DDEV Provider"
+    },
+    {
+      "tracker": "gitlab",
+      "label": "GitLab Self-Managed",
+      "issueRef": "",
+      "searchTerm": ""
+    },
+    {
+      "tracker": "redmine",
+      "label": "Redmine",
+      "issueRef": "",
+      "searchTerm": ""
+    },
+    {
+      "tracker": "github",
+      "label": "GitHub",
+      "issueRef": "",
+      "searchTerm": ""
+    },
+    {
+      "tracker": "asana",
+      "label": "Asana",
+      "issueRef": "",
+      "searchTerm": ""
+    }
+  ]
+}

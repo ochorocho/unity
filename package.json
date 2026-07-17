@@ -7,7 +7,8 @@
 	"scripts": {
 		"build": "NODE_ENV=production vite --mode production build",
 		"dev": "NODE_ENV=development vite --mode development build",
-		"watch": "NODE_ENV=development vite --mode development build --watch"
+		"watch": "NODE_ENV=development vite --mode development build --watch",
+		"test:e2e": "playwright test"
 	},
 	"author": "Jochen Roth",
 	"license": "AGPL-3.0-or-later",
@@ -38,7 +39,10 @@
 		"@nextcloud/babel-config": "^1.0.0",
 		"@nextcloud/browserslist-config": "^3.0.0",
 		"@nextcloud/vite-config": "^2.3.5",
+		"@ochorocho/playwright-db-connector": "^0.0.4",
+		"@playwright/test": "1.61.1",
 		"@types/node": "^22.0.0",
+		"mysql2": "^3.23.0",
 		"typescript": "~5.5.0"
 	}
 }

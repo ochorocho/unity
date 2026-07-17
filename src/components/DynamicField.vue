@@ -122,14 +122,19 @@ export default {
    input and textarea line up with NcTextField/NcSelect and the native selects. */
 .unity-field-input,
 .unity-field-textarea {
-	min-height: var(--default-clickable-area, 44px);
 	padding: 0 12px;
-	border: 2px solid var(--color-border-maxcontrast);
+	border: 1px solid var(--color-border-maxcontrast);
 	border-radius: var(--border-radius-element, 8px);
 	background-color: var(--color-main-background);
 	color: var(--color-main-text);
 	width: 100%;
 	box-sizing: border-box;
+}
+.unity-field-input {
+	/* Fixed height (the same variable NcTextField's wrapper uses), NOT min-height: a
+	   native date input's intrinsic height exceeds the clickable area, which made it
+	   render taller than the NcTextField next to it. */
+	height: var(--default-clickable-area, 44px);
 }
 .unity-field-input:hover,
 .unity-field-textarea:hover {

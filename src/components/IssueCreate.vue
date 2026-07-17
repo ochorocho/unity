@@ -401,6 +401,11 @@ export default {
 		grid-template-columns: 1fr 1fr; /* capped at two per row */
 	}
 }
+/* NcSelect ships a bottom margin; drop it so dropdowns align with the other controls
+   (row spacing comes from the grid gap). */
+.unity-create :deep(.v-select) {
+	margin: 0;
+}
 .unity-create-field--full,
 .unity-form-grid__full {
 	grid-column: 1 / -1;
@@ -420,7 +425,7 @@ export default {
 .unity-create-select {
 	min-height: var(--default-clickable-area, 44px);
 	padding: 0 12px;
-	border: 2px solid var(--color-border-maxcontrast);
+	border: 1px solid var(--color-border-maxcontrast);
 	border-radius: var(--border-radius-element, 8px);
 	background-color: var(--color-main-background);
 	color: var(--color-main-text);
