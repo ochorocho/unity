@@ -10,8 +10,8 @@
     {
       "tracker": "jira",
       "label": "Jira Server",
-      "issueRef": "",
-      "searchTerm": ""
+      "issueRef": "GCGWEBSUP-2953",
+      "searchTerm": "Test Issue Jochen"
     },
     {
       "tracker": "gitlab",
@@ -40,8 +40,8 @@
     {
       "tracker": "asana",
       "label": "Asana",
-      "issueRef": "",
-      "searchTerm": ""
+      "issueRef": "#1216541125745589",
+      "searchTerm": "Feedback zum Arbeitsergebnis senden"
     }
   ]
 }

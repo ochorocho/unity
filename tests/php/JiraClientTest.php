@@ -629,18 +629,23 @@ class JiraClientTest extends TestCase {
 		$this->assertStringStartsWith('Basic ', $captured['options']['headers']['Authorization']);
 	}
 
-	public function testGetCreateMetaMapsProjectsAndTypes(): void {
-		$this->httpClient->method('request')->willReturnCallback(fn ($m, $u, $o) => $this->response(200, [
-			'projects' => [[
-				'key' => 'ABC', 'name' => 'Acme',
-				'issuetypes' => [['id' => '1', 'name' => 'Bug'], ['id' => '2', 'name' => 'Sub', 'subtask' => true]],
-			]],
-		]));
+	public function testGetCreateMetaListsProjectsWithoutBulkCreatemeta(): void {
+		// The bulk /issue/createmeta was removed in Jira 9.0; the project list comes from
+		// /project, and per-project types are resolved lazily via the granular endpoint.
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			$this->assertStringNotContainsString('/issue/createmeta', $u, 'bulk createmeta must not be called');
+			$captured = $u;
+			return $this->response(200, [
+				['key' => 'ABC', 'name' => 'Acme'],
+				['key' => 'DEF', 'name' => 'Delta'],
+			]);
+		});
 		$meta = $this->jira->getCreateMeta($this->connection);
-		$this->assertCount(1, $meta['projects']);
+		$this->assertStringContainsString('/project', $captured);
+		$this->assertCount(2, $meta['projects']);
 		$this->assertSame('ABC', $meta['projects'][0]['id']);
-		$this->assertCount(1, $meta['projects'][0]['types'], 'subtask types filtered out');
-		$this->assertSame('Bug', $meta['projects'][0]['types'][0]['name']);
+		$this->assertSame([], $meta['projects'][0]['types'], 'types resolved lazily per project');
 		$this->assertTrue($meta['capabilities']['type']);
 	}
 
@@ -684,6 +689,57 @@ class JiraClientTest extends TestCase {
 		$this->assertTrue($meta['capabilities']['labels']);
 		$this->assertTrue($meta['capabilities']['labelsFreeText']);
 		$this->assertSame([], $meta['labels']);
+	}
+
+	public function testGetCreateMetaServerLoadsTypesFromGranularEndpoint(): void {
+		// Jira 9 Server exposes types via the granular endpoint's `values` page bean.
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) {
+			if (str_contains($u, '/serverInfo')) {
+				return $this->response(200, ['deploymentType' => 'Server', 'version' => '9.17.5']);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes') && preg_match('#/issuetypes/\d#', $u) !== 1) {
+				return $this->response(200, ['values' => [
+					['id' => '1', 'name' => 'Bug', 'subtask' => false],
+					['id' => '5', 'name' => 'Sub-task', 'subtask' => true],
+					['id' => '10000', 'name' => 'Story', 'subtask' => false],
+				]]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->jira->getCreateMeta($this->serverConnection(), null, 'AKE', null);
+		$this->assertSame([
+			['id' => '1', 'name' => 'Bug'],
+			['id' => '10000', 'name' => 'Story'],
+		], $meta['types']);
+	}
+
+	public function testCreateIssueServerResolvesDefaultTypeWithoutBulkCreatemeta(): void {
+		// Regression: no explicit type → default resolved from the granular endpoint,
+		// and the bulk /issue/createmeta (removed in Jira 9.0) is never requested.
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/serverInfo')) {
+				return $this->response(200, ['deploymentType' => 'Server', 'version' => '9.17.5']);
+			}
+			$this->assertFalse(
+				str_contains($u, '/issue/createmeta') && !str_contains($u, '/issuetypes'),
+				'bulk /issue/createmeta must not be called',
+			);
+			if (str_contains($u, '/createmeta/AKE/issuetypes') && preg_match('#/issuetypes/\d#', $u) !== 1) {
+				return $this->response(200, ['values' => [['id' => '3', 'name' => 'Task', 'subtask' => false]]]);
+			}
+			if (str_contains($u, '/createmeta/AKE/issuetypes/3')) {
+				return $this->response(200, ['values' => []]);
+			}
+			if ($m === 'POST' && str_contains($u, '/issue') && !str_contains($u, 'createmeta')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			return $this->response(200, ['key' => 'AKE-9', 'fields' => ['summary' => 'New']]);
+		});
+		$issue = $this->jira->createIssue($this->serverConnection(), ['project' => 'AKE', 'title' => 'New', 'description' => 'Body']);
+		$this->assertSame('3', $captured['fields']['issuetype']['id'], 'default type from granular endpoint');
+		$this->assertSame('AKE-9', $issue->displayId);
 	}
 
 	public function testCreateIssueEncodesLabels(): void {
@@ -951,6 +1007,23 @@ class JiraClientTest extends TestCase {
 		$this->assertSame('DC-1', $captured['query']['issueKey']);
 		$this->assertArrayNotHasKey('query', $captured['query'], 'empty query omitted');
 		$this->assertSame([['id' => 'carol', 'name' => 'Carol']], $out);
+	}
+
+	public function testSearchAssigneesServerFiltersByUsername(): void {
+		// Regression: Server/DC filters by `username`, not the Cloud-only `query` param.
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/serverInfo')) {
+				return $this->response(200, ['deploymentType' => 'Server', 'version' => '9.17.5']);
+			}
+			$captured = $o;
+			return $this->response(200, [['name' => 'jochen', 'displayName' => 'Jochen']]);
+		});
+		$out = $this->jira->searchAssignees($this->serverConnection(), ['refParts' => ['key' => 'DC-1']], 'jochen');
+		$this->assertSame('jochen', $captured['query']['username']);
+		$this->assertArrayNotHasKey('query', $captured['query'], 'Cloud query param not sent on Server');
+		$this->assertSame('DC-1', $captured['query']['issueKey']);
+		$this->assertSame([['id' => 'jochen', 'name' => 'Jochen']], $out);
 	}
 
 	public function testCreateIssueEncodesAssignee(): void {

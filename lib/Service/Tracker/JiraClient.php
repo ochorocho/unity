@@ -696,44 +696,24 @@ class JiraClient extends AbstractTrackerClient {
 				'fields' => $this->describeFields($this->createMetaFields($connection, $project, (string)$type)),
 			];
 		}
+		// The bulk /issue/createmeta was removed in Jira 9.0, so list projects directly;
+		// each project's issue types are resolved lazily via issueTypes() once selected.
+		$data = $this->json(
+			$this->request('GET', $this->apiRoot($connection) . '/project', [
+				'headers' => $this->defaultHeaders($connection),
+				'query' => ['maxResults' => '100'],
+			], $connection),
+			'Projects',
+		);
+		// /project returns a bare list; some deployments wrap it in a page bean.
+		$rows = (isset($data['values']) && is_array($data['values'])) ? $data['values'] : $data;
 		$projects = [];
-		try {
-			$data = $this->json(
-				$this->request('GET', $this->apiRoot($connection) . '/issue/createmeta', [
-					'headers' => $this->defaultHeaders($connection),
-					'query' => ['expand' => 'projects.issuetypes'],
-				], $connection),
-				'Create meta',
-			);
-			foreach ($data['projects'] ?? [] as $p) {
-				if (!is_array($p)) {
-					continue;
-				}
-				$types = [];
-				foreach ($p['issuetypes'] ?? [] as $it) {
-					if (is_array($it) && ($it['subtask'] ?? false) !== true) {
-						$types[] = ['id' => (string)($it['id'] ?? ''), 'name' => (string)($it['name'] ?? '')];
-					}
-				}
-				$projects[] = ['id' => (string)($p['key'] ?? ''), 'name' => (string)($p['name'] ?? $p['key'] ?? ''), 'types' => $types];
-			}
-		} catch (TrackerException $e) {
-			// Newer Jira Cloud dropped the expandable createmeta; fall back to a bare
-			// project list. Types are then resolved per project at create time.
-			$data = $this->json(
-				$this->request('GET', $this->apiRoot($connection) . '/project', [
-					'headers' => $this->defaultHeaders($connection),
-					'query' => ['maxResults' => '100'],
-				], $connection),
-				'Projects',
-			);
-			foreach ($data as $p) {
-				if (is_array($p)) {
-					$projects[] = ['id' => (string)($p['key'] ?? ''), 'name' => (string)($p['name'] ?? $p['key'] ?? ''), 'types' => []];
-				}
+		foreach ($rows as $p) {
+			if (is_array($p)) {
+				$projects[] = ['id' => (string)($p['key'] ?? ''), 'name' => (string)($p['name'] ?? $p['key'] ?? ''), 'types' => []];
 			}
 		}
-		// createmeta / project lists aren't text-searchable, so narrow them here.
+		// project lists aren't text-searchable, so narrow them here.
 		return ['projects' => $this->filterProjectsByQuery($projects, $query), 'capabilities' => ['type' => true, 'typeRequired' => true], 'fields' => []];
 	}
 
@@ -790,24 +770,8 @@ class JiraClient extends AbstractTrackerClient {
 
 	/** First non-subtask issue type for a project (used when none was chosen). */
 	private function defaultIssueTypeId(Connection $connection, string $projectKey): string {
-		try {
-			$data = $this->json(
-				$this->request('GET', $this->apiRoot($connection) . '/issue/createmeta', [
-					'headers' => $this->defaultHeaders($connection),
-					'query' => ['projectKeys' => $projectKey, 'expand' => 'projects.issuetypes'],
-				], $connection),
-				'Create meta',
-			);
-			foreach ($data['projects'] ?? [] as $p) {
-				foreach ($p['issuetypes'] ?? [] as $it) {
-					if (is_array($it) && ($it['subtask'] ?? false) !== true) {
-						return (string)($it['id'] ?? '');
-					}
-				}
-			}
-		} catch (TrackerException $e) {
-		}
-		return '';
+		$types = $this->issueTypes($connection, $projectKey);
+		return (string)($types[0]['id'] ?? '');
 	}
 
 	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
@@ -896,11 +860,17 @@ class JiraClient extends AbstractTrackerClient {
 	public function searchAssignees(Connection $connection, array $context, string $query): array {
 		$query = trim($query);
 		$params = ['maxResults' => '50'];
-		// Jira Cloud needs the `query` param present (even empty) alongside
-		// issueKey/project: omitting it 400s, but an empty value returns the full
-		// assignable list — which pre-loads the picker before the user types.
-		// Server/DC lists from issueKey/project alone, so it omits `query` when empty.
-		if ($query !== '' || !$this->isServer($connection)) {
+		// The search text goes under a deployment-specific parameter. Jira Cloud
+		// filters by `query` and needs it present even when empty (omitting it 400s;
+		// an empty value returns the full assignable list, pre-loading the picker).
+		// Jira Server/DC ignores `query` and filters by `username` (matching username,
+		// display name and email); it lists from issueKey/project alone, so the param
+		// is omitted entirely when the text is empty.
+		if ($this->isServer($connection)) {
+			if ($query !== '') {
+				$params['username'] = $query;
+			}
+		} else {
 			$params['query'] = $query;
 		}
 		if (isset($context['refParts'])) {
@@ -945,7 +915,7 @@ class JiraClient extends AbstractTrackerClient {
 
 	/**
 	 * Issue types available for a project via the granular create-meta endpoint
-	 * (reliable, unlike the deprecated bulk `expand=projects.issuetypes`). Subtasks
+	 * (the Jira 9.0 replacement for the removed bulk `/issue/createmeta`). Subtasks
 	 * are excluded.
 	 *
 	 * @return list<array{id: string, name: string}>
@@ -965,8 +935,10 @@ class JiraClient extends AbstractTrackerClient {
 		} catch (TrackerException $e) {
 			return [];
 		}
+		// The endpoint returns a page bean keyed `values`; older servers used `issueTypes`.
+		$list = $data['values'] ?? $data['issueTypes'] ?? [];
 		$out = [];
-		foreach ($data['issueTypes'] ?? [] as $it) {
+		foreach ($list as $it) {
 			if (is_array($it) && ($it['subtask'] ?? false) !== true) {
 				$out[] = ['id' => (string)($it['id'] ?? ''), 'name' => (string)($it['name'] ?? '')];
 			}
@@ -994,8 +966,11 @@ class JiraClient extends AbstractTrackerClient {
 		} catch (TrackerException $e) {
 			return [];
 		}
+		// The endpoint returns a page bean keyed `values`; older servers used `fields`.
+		// Either way it is a list of field metas that each already carry `fieldId`.
+		$entries = $data['values'] ?? $data['fields'] ?? [];
 		$out = [];
-		foreach ($data['fields'] ?? [] as $f) {
+		foreach ($entries as $f) {
 			if (is_array($f)) {
 				$out[] = $f;
 			}
