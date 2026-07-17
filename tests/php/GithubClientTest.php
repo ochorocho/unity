@@ -285,6 +285,36 @@ class GithubClientTest extends TestCase {
 		$this->assertSame(3, $captured['milestone']);
 	}
 
+	public function testGetCreateMetaIncludesLabels(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/labels')) {
+				return $this->response(200, [['name' => 'bug'], ['name' => 'ui']]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->client->getCreateMeta($this->connection, null, 'octocat/Hello-World', null);
+		$this->assertTrue($meta['capabilities']['labels']);
+		$this->assertFalse($meta['capabilities']['labelsFreeText']);
+		$this->assertSame([['id' => 'bug', 'name' => 'bug'], ['id' => 'ui', 'name' => 'ui']], $meta['labels']);
+	}
+
+	public function testCreateIssueEncodesLabels(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issues')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, [
+					'number' => 5, 'title' => 'T',
+					'repository_url' => 'https://api.github.com/repos/octocat/Hello-World',
+					'html_url' => 'https://github.com/octocat/Hello-World/issues/5',
+				]);
+			}
+			return $this->response(200, []);
+		});
+		$this->client->createIssue($this->connection, ['project' => 'octocat/Hello-World', 'title' => 'T', 'labels' => ['bug', 'ui']]);
+		$this->assertSame(['bug', 'ui'], $captured['labels']);
+	}
+
 	public function testCreateIssuePostsToRepo(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

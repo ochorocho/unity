@@ -464,9 +464,15 @@ class AsanaClient extends AbstractTrackerClient {
 
 	public function getCreateMeta(Connection $connection, ?string $query = null, ?string $project = null, ?string $type = null): array {
 		if ($project !== null && $project !== '') {
+			$labels = [];
+			try {
+				$labels = $this->fetchWorkspaceTags($connection);
+			} catch (TrackerException $e) {
+			}
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true, 'labels' => true, 'labelsFreeText' => false],
+				'labels' => $labels,
 				'fields' => array_merge(
 					[$this->field('due_on', 'Due date', 'date')],
 					$this->projectCustomFieldMeta($connection, $project)['descriptors'],
@@ -525,6 +531,14 @@ class AsanaClient extends AbstractTrackerClient {
 				'Create issue',
 			),
 		);
+		// Labels are workspace tags, which can't be set by name in the create POST.
+		// Mirror updateIssue: sync tags on the new task's gid, then re-read so the
+		// returned issue reflects them.
+		$gid = (string)($raw['gid'] ?? '');
+		if ($gid !== '' && isset($target['labels']) && is_array($target['labels'])) {
+			$this->syncTags($connection, ['gid' => $gid], array_values(array_map('strval', $target['labels'])));
+			return $this->getIssue($connection, ['gid' => $gid]);
+		}
 		return $this->normalizeIssue($connection, $raw);
 	}
 

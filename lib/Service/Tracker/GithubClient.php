@@ -290,7 +290,8 @@ class GithubClient extends AbstractTrackerClient {
 			[$owner, $repo] = explode('/', $project, 2);
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true, 'labels' => true, 'labelsFreeText' => false],
+				'labels' => $this->labelOptions($connection, $owner, $repo),
 				'fields' => $this->describeFields($connection, $owner, $repo),
 			];
 		}
@@ -347,6 +348,9 @@ class GithubClient extends AbstractTrackerClient {
 		if ($assignee !== '') {
 			$body['assignees'] = [$assignee];
 		}
+		if (isset($target['labels']) && is_array($target['labels'])) {
+			$body['labels'] = array_values(array_map('strval', $target['labels']));
+		}
 		$this->applyFields($body, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/issues', [
@@ -358,14 +362,18 @@ class GithubClient extends AbstractTrackerClient {
 		return $this->normalizeIssue($connection, $data);
 	}
 
-	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
-		$owner = rawurlencode((string)($refParts['owner'] ?? ''));
-		$repo = rawurlencode((string)($refParts['repo'] ?? ''));
-		$repoBase = $this->apiRoot($connection) . '/repos/' . $owner . '/' . $repo;
+	/**
+	 * A repo's labels as {id, name} options (name is the id — GitHub labels are keyed by
+	 * name). Swallows errors so the meta still renders without them. Shared by the edit
+	 * and create metas.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function labelOptions(Connection $connection, string $owner, string $repo): array {
 		$labels = [];
 		try {
 			$found = $this->json(
-				$this->request('GET', $repoBase . '/labels', [
+				$this->request('GET', $this->apiRoot($connection) . '/repos/' . rawurlencode($owner) . '/' . rawurlencode($repo) . '/labels', [
 					'headers' => $this->defaultHeaders($connection),
 					'query' => ['per_page' => '100'],
 				], $connection),
@@ -378,6 +386,11 @@ class GithubClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		return $labels;
+	}
+
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
+		$labels = $this->labelOptions($connection, (string)($refParts['owner'] ?? ''), (string)($refParts['repo'] ?? ''));
 		$assignee = null;
 		$fields = [];
 		try {

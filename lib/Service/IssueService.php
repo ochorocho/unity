@@ -115,7 +115,7 @@ class IssueService {
 	/**
 	 * Create a new issue on a connection and return it.
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, fields?: array<string, mixed>} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, labels?: mixed, fields?: array<string, mixed>} $target
 	 * @throws TrackerException
 	 */
 	public function createIssue(string $userId, string $connectionId, array $target): Issue {

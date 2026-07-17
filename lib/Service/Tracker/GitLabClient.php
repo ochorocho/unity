@@ -297,7 +297,8 @@ class GitLabClient extends AbstractTrackerClient {
 		if ($project !== null && $project !== '') {
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true],
+				'capabilities' => ['type' => false, 'typeRequired' => false, 'assignee' => true, 'labels' => true, 'labelsFreeText' => false],
+				'labels' => $this->labelOptions($connection, $project),
 				'fields' => $this->describeFields($connection, $project),
 			];
 		}
@@ -347,6 +348,9 @@ class GitLabClient extends AbstractTrackerClient {
 		if ($assignee !== '') {
 			$body['assignee_ids'] = [(int)$assignee];
 		}
+		if (isset($target['labels']) && is_array($target['labels'])) {
+			$body['labels'] = implode(',', array_map('strval', $target['labels']));
+		}
 		$this->applyFields($body, is_array($target['fields'] ?? null) ? $target['fields'] : []);
 		$data = $this->json(
 			$this->request('POST', $this->apiRoot($connection) . '/projects/' . rawurlencode($projectId) . '/issues', [
@@ -358,12 +362,17 @@ class GitLabClient extends AbstractTrackerClient {
 		return $this->normalizeIssue($connection, $data);
 	}
 
-	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
-		$project = rawurlencode((string)($refParts['project'] ?? ''));
+	/**
+	 * A project's labels as {id, name} options (name is the id). Swallows errors so the
+	 * meta still renders without them. Shared by the edit and create metas.
+	 *
+	 * @return list<array{id: string, name: string}>
+	 */
+	private function labelOptions(Connection $connection, string $projectId): array {
 		$labels = [];
 		try {
 			$found = $this->json(
-				$this->request('GET', $this->apiRoot($connection) . '/projects/' . $project . '/labels', [
+				$this->request('GET', $this->apiRoot($connection) . '/projects/' . rawurlencode($projectId) . '/labels', [
 					'headers' => $this->defaultHeaders($connection),
 					'query' => ['per_page' => '100'],
 				], $connection),
@@ -376,6 +385,11 @@ class GitLabClient extends AbstractTrackerClient {
 			}
 		} catch (TrackerException $e) {
 		}
+		return $labels;
+	}
+
+	public function getEditMeta(Connection $connection, array $refParts, ?string $type = null): array {
+		$labels = $this->labelOptions($connection, (string)($refParts['project'] ?? ''));
 		$assignee = null;
 		$fields = [];
 		try {

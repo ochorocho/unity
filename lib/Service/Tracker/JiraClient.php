@@ -689,7 +689,9 @@ class JiraClient extends AbstractTrackerClient {
 			$noType = ($type === null || $type === '');
 			return [
 				'projects' => [],
-				'capabilities' => ['type' => true, 'typeRequired' => true, 'assignee' => true],
+				'capabilities' => ['type' => true, 'typeRequired' => true, 'assignee' => true, 'labels' => true, 'labelsFreeText' => true],
+				// Jira labels are free-text strings — no fixed option list (matches edit meta).
+				'labels' => [],
 				'types' => $noType ? $this->issueTypes($connection, $project) : [],
 				'fields' => $this->describeFields($this->createMetaFields($connection, $project, (string)$type)),
 			];
@@ -759,6 +761,9 @@ class JiraClient extends AbstractTrackerClient {
 		$assignee = (string)($target['assignee'] ?? '');
 		if ($assignee !== '') {
 			$fields['assignee'] = $this->isServer($connection) ? ['name' => $assignee] : ['accountId' => $assignee];
+		}
+		if (isset($target['labels']) && is_array($target['labels'])) {
+			$fields['labels'] = array_values(array_map('strval', $target['labels']));
 		}
 		$server = $this->isServer($connection);
 		$metaFields = $this->createMetaFields($connection, $projectKey, $typeId);

@@ -40,9 +40,24 @@
 							</p>
 						</div>
 
+						<div class="unity-create-field unity-create-field--full">
+							<label class="unity-create-label">{{ t('unity', 'Title') }}</label>
+							<NcTextField v-model="title" label-outside :aria-label="t('unity', 'Title')" />
+						</div>
+
+						<div class="unity-create-field unity-create-field--full">
+							<label class="unity-create-label">{{ t('unity', 'Description') }}</label>
+							<MarkupEditor v-model="description"
+								:format="bodyFormat"
+								:tracker="selectedTracker"
+								:connection="connectionId"
+								:project="projectId"
+								:rows="6" />
+						</div>
+
 						<div v-if="currentTypes.length" class="unity-create-field">
 							<label class="unity-create-label">{{ t('unity', 'Type') }}</label>
-							<select v-model="typeId" class="unity-create-select">
+							<select v-model="typeId" class="unity-create-select" :disabled="fieldsLoading">
 								<option value="" :disabled="meta.capabilities.typeRequired">
 									{{ meta.capabilities.typeRequired ? t('unity', 'Choose a type') : t('unity', '(default)') }}
 								</option>
@@ -58,19 +73,15 @@
 								@change="assigneeChoice = $event" />
 						</div>
 
-						<div class="unity-create-field unity-create-field--full">
-							<label class="unity-create-label">{{ t('unity', 'Title') }}</label>
-							<NcTextField v-model="title" label-outside :aria-label="t('unity', 'Title')" />
-						</div>
-
-						<div class="unity-create-field unity-create-field--full">
-							<label class="unity-create-label">{{ t('unity', 'Description') }}</label>
-							<MarkupEditor v-model="description"
-								:format="bodyFormat"
-								:tracker="selectedTracker"
-								:connection="connectionId"
-								:project="projectId"
-								:rows="6" />
+						<div v-if="projectId && labelsSupported" class="unity-create-field">
+							<label class="unity-create-label">{{ t('unity', 'Labels') }}</label>
+							<NcSelect v-model="labels"
+								:options="labelOptions"
+								:multiple="true"
+								:close-on-select="false"
+								:taggable="labelsFreeText"
+								:aria-label-combobox="t('unity', 'Labels')"
+								:placeholder="labelsFreeText ? t('unity', 'Search or type to add labels') : t('unity', 'Search labels')" />
 						</div>
 
 						<NcLoadingIcon v-if="fieldsLoading" class="unity-form-grid__full" :size="20" />
@@ -153,6 +164,12 @@ export default {
 			// the chosen user ({id,name} from AssigneePicker).
 			assigneeSupported: false,
 			assigneeChoice: null,
+			// Labels (from the project-context create-meta): whether they're offered, whether
+			// they're free-text, the option list ({id,name}), and the chosen label names.
+			labelsSupported: false,
+			labelsFreeText: false,
+			labelMeta: [],
+			labels: [],
 		}
 	},
 	computed: {
@@ -182,6 +199,10 @@ export default {
 				return this.projectTypes
 			}
 			return this.selectedProject ? (this.selectedProject.types || []) : []
+		},
+		// Free-text tags for the Labels picker (mirrors edit's labelOptions).
+		labelOptions() {
+			return this.labelMeta.map((l) => l.name)
 		},
 		// "Project" for most trackers, "Repository" for GitHub.
 		projectLabel() {
@@ -213,6 +234,7 @@ export default {
 		projectSelection() {
 			this.typeId = ''
 			this.projectTypes = []
+			this.labels = []
 		},
 		// Re-fetch the dynamic field descriptors whenever the project/type changes.
 		fieldContext() {
@@ -238,6 +260,10 @@ export default {
 			this.typeId = ''
 			this.fields = []
 			this.fieldValues = {}
+			this.labels = []
+			this.labelsSupported = false
+			this.labelsFreeText = false
+			this.labelMeta = []
 			this.loadMeta()
 		},
 		// Fetch the provider-native field descriptors for the current project/type.
@@ -262,7 +288,11 @@ export default {
 				if (data && Array.isArray(data.types) && data.types.length) {
 					this.projectTypes = data.types
 				}
-				this.assigneeSupported = !!(data && data.capabilities && data.capabilities.assignee)
+				const caps = (data && data.capabilities) || {}
+				this.assigneeSupported = !!caps.assignee
+				this.labelsSupported = !!caps.labels
+				this.labelsFreeText = !!caps.labelsFreeText
+				this.labelMeta = data && Array.isArray(data.labels) ? data.labels : []
 				this.fields = data && Array.isArray(data.fields) ? data.fields : []
 				this.seedFieldValues()
 			} catch (e) {
@@ -362,6 +392,7 @@ export default {
 					title: this.title,
 					description: this.description,
 					assignee: (this.assigneeSupported && this.assigneeChoice) ? this.assigneeChoice.id : '',
+					labels: this.labelsSupported ? this.labels : [],
 					fields: this.fieldValues,
 				})
 				if (data && data.ref) {

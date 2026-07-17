@@ -16,14 +16,14 @@
     {
       "tracker": "gitlab",
       "label": "gitlab.com",
-      "issueRef": "",
-      "searchTerm": "DDEV Provider"
+      "issueRef": "#9",
+      "searchTerm": "Test issue"
     },
     {
       "tracker": "gitlab",
       "label": "GitLab Self-Managed",
-      "issueRef": "",
-      "searchTerm": ""
+      "issueRef": "#9",
+      "searchTerm": "Test issue"
     },
     {
       "tracker": "redmine",
@@ -34,8 +34,8 @@
     {
       "tracker": "github",
       "label": "GitHub",
-      "issueRef": "",
-      "searchTerm": ""
+      "issueRef": "#3",
+      "searchTerm": "Test Issue"
     },
     {
       "tracker": "asana",

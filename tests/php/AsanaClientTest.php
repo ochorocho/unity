@@ -365,6 +365,35 @@ class AsanaClientTest extends TestCase {
 		$this->assertSame('#new1', $issue->displayId);
 	}
 
+	public function testCreateIssueSyncsTagsByName(): void {
+		$calls = [];
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o = []) use (&$calls) {
+			$calls[] = ['method' => $m, 'url' => $u, 'options' => $o];
+			// The create POST returns the new task gid.
+			if ($m === 'POST' && preg_match('#/tasks$#', $u)) {
+				return $this->response(201, $this->envelope(['gid' => 'new1', 'name' => 'Task', 'completed' => false]));
+			}
+			// syncTags first reads the (empty) tags of the fresh task.
+			if ($m === 'GET' && ($o['query']['opt_fields'] ?? '') === 'tags.gid,tags.name') {
+				return $this->response(200, $this->envelope(['tags' => []]));
+			}
+			// Workspace tag list resolves the added name to its gid.
+			if ($m === 'GET' && str_contains($u, '/tags')) {
+				return $this->response(200, $this->envelope([['gid' => 't-new', 'name' => 'NewTag']]));
+			}
+			// Post-sync re-read of the task detail.
+			return $this->response(200, $this->envelope(['gid' => 'new1', 'name' => 'Task', 'completed' => false]));
+		});
+
+		$this->client->createIssue($this->connection, [
+			'project' => 'proj1', 'title' => 'Task', 'labels' => ['NewTag'],
+		]);
+
+		$add = array_values(array_filter($calls, static fn ($c) => $c['method'] === 'POST' && str_contains($c['url'], '/tasks/new1/addTag')));
+		$this->assertCount(1, $add);
+		$this->assertSame('t-new', json_decode($add[0]['options']['body'], true)['data']['tag']);
+	}
+
 	public function testGetCreateMetaListsProjects(): void {
 		$this->http->method('request')->willReturnCallback(function ($m, $u) {
 			return $this->response(200, $this->envelope([
@@ -397,6 +426,21 @@ class AsanaClientTest extends TestCase {
 		$this->assertSame('date', $meta['fields'][0]['type']);
 		$this->assertArrayNotHasKey('value', $meta['fields'][0]);
 		$this->assertSame('cf1', $meta['fields'][1]['id']);
+	}
+
+	public function testGetCreateMetaAdvertisesWorkspaceTagsAsLabels(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/tags')) {
+				return $this->response(200, $this->envelope([['gid' => 't1', 'name' => 'urgent']]));
+			}
+			return $this->response(200, $this->envelope([]));
+		});
+
+		$meta = $this->client->getCreateMeta($this->connection, null, 'proj1');
+
+		$this->assertTrue($meta['capabilities']['labels']);
+		$this->assertFalse($meta['capabilities']['labelsFreeText']);
+		$this->assertSame([['id' => 't1', 'name' => 'urgent']], $meta['labels']);
 	}
 
 	public function testGetEditMetaAdvertisesDueDateWithCurrentValue(): void {

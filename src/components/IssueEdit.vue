@@ -291,8 +291,4 @@ export default {
 .unity-edit-select:hover:not(:disabled) {
 	border-color: var(--color-main-text);
 }
-.unity-edit-multiselect {
-	min-height: 90px;
-	border-radius: var(--border-radius-element, 8px);
-}
 </style>

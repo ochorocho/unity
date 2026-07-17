@@ -434,6 +434,32 @@ class GitLabClientTest extends TestCase {
 		$this->assertSame('bool', $byId['confidential']['type']);
 	}
 
+	public function testGetCreateMetaIncludesLabels(): void {
+		$this->http->method('request')->willReturnCallback(function ($m, $u) {
+			if (str_contains($u, '/labels')) {
+				return $this->response(200, [['name' => 'bug'], ['name' => 'ui']]);
+			}
+			return $this->response(200, []);
+		});
+		$meta = $this->client->getCreateMeta($this->connection, null, '42', null);
+		$this->assertTrue($meta['capabilities']['labels']);
+		$this->assertFalse($meta['capabilities']['labelsFreeText']);
+		$this->assertSame([['id' => 'bug', 'name' => 'bug'], ['id' => 'ui', 'name' => 'ui']], $meta['labels']);
+	}
+
+	public function testCreateIssueEncodesLabels(): void {
+		$captured = null;
+		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if ($m === 'POST' && str_contains($u, '/issues')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['id' => 1, 'iid' => 9, 'project_id' => 42, 'title' => 'New', 'references' => ['full' => 'g/a#9'], 'web_url' => 'u']);
+			}
+			return $this->response(200, []);
+		});
+		$this->client->createIssue($this->connection, ['project' => '42', 'title' => 'New', 'labels' => ['bug', 'ui']]);
+		$this->assertSame('bug,ui', $captured['labels']);
+	}
+
 	public function testCreateIssueEncodesDynamicFields(): void {
 		$captured = null;
 		$this->http->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {

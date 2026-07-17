@@ -112,7 +112,7 @@ abstract class AbstractTrackerClient implements TrackerClientInterface {
 	/**
 	 * Default: creating issues is unsupported. Trackers with a create API override.
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, fields?: array<string, mixed>} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, labels?: mixed, fields?: array<string, mixed>} $target
 	 */
 	public function createIssue(Connection $connection, array $target): \OCA\Unity\Model\Issue {
 		throw new TrackerException('Creating issues is not supported for this tracker');

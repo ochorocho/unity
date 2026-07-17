@@ -84,10 +84,11 @@ class IssueController extends Controller {
 	}
 
 	/**
+	 * @param string[]|null $labels
 	 * @param array<string, mixed> $fields provider-native field values keyed by descriptor id
 	 */
 	#[NoAdminRequired]
-	public function create(string $connection, string $project, string $title, string $description = '', string $type = '', string $assignee = '', array $fields = []): DataResponse {
+	public function create(string $connection, string $project, string $title, string $description = '', string $type = '', string $assignee = '', ?array $labels = null, array $fields = []): DataResponse {
 		if (trim($title) === '') {
 			return new DataResponse(['error' => 'A title is required'], Http::STATUS_BAD_REQUEST);
 		}
@@ -95,14 +96,18 @@ class IssueController extends Controller {
 			return new DataResponse(['error' => 'A project is required'], Http::STATUS_BAD_REQUEST);
 		}
 		try {
-			$issue = $this->issueService->createIssue($this->userId ?? '', $connection, [
+			$target = [
 				'project' => $project,
 				'type' => $type,
 				'title' => $title,
 				'description' => $description,
 				'assignee' => $assignee,
 				'fields' => $fields,
-			]);
+			];
+			if ($labels !== null) {
+				$target['labels'] = $labels;
+			}
+			$issue = $this->issueService->createIssue($this->userId ?? '', $connection, $target);
 			return new DataResponse($issue, Http::STATUS_CREATED);
 		} catch (TrackerException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);

@@ -680,6 +680,28 @@ class JiraClientTest extends TestCase {
 			['id' => '1', 'name' => 'Bug'],
 			['id' => '10000', 'name' => 'Story'],
 		], $meta['types']);
+		// Labels are free-text on Jira: capability on, no fixed options.
+		$this->assertTrue($meta['capabilities']['labels']);
+		$this->assertTrue($meta['capabilities']['labelsFreeText']);
+		$this->assertSame([], $meta['labels']);
+	}
+
+	public function testCreateIssueEncodesLabels(): void {
+		$captured = null;
+		$this->httpClient->method('request')->willReturnCallback(function ($m, $u, $o) use (&$captured) {
+			if (str_contains($u, '/createmeta/AKE/issuetypes/1')) {
+				return $this->response(200, ['fields' => []]);
+			}
+			if ($m === 'POST' && str_contains($u, '/issue') && !str_contains($u, 'createmeta')) {
+				$captured = json_decode($o['body'], true);
+				return $this->response(201, ['key' => 'AKE-9']);
+			}
+			return $this->response(200, ['key' => 'AKE-9', 'fields' => ['summary' => 'T', 'project' => ['name' => 'AK-E']]]);
+		});
+		$this->jira->createIssue($this->connection, [
+			'project' => 'AKE', 'type' => '1', 'title' => 'T', 'description' => '', 'labels' => ['x', 'y'],
+		]);
+		$this->assertSame(['x', 'y'], $captured['fields']['labels']);
 	}
 
 	public function testGetCreateMetaOmitsTypesWhenTypeChosen(): void {

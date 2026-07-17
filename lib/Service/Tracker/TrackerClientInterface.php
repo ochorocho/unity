@@ -111,7 +111,7 @@ interface TrackerClientInterface {
 	/**
 	 * Create a new issue and return it (normalized, with its ref).
 	 *
-	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, fields?: array<string, mixed>} $target
+	 * @param array{project: string, type?: string, title: string, description?: string, assignee?: string, labels?: mixed, fields?: array<string, mixed>} $target
 	 */
 	public function createIssue(Connection $connection, array $target): Issue;
 
